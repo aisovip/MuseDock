@@ -1206,6 +1206,8 @@
 
         messages,
 
+        outputFormat: { type: 'json' },
+
         temperature: 0.35,
 
         stream: true,
@@ -1370,6 +1372,7 @@
       try {
         retryResult = await modelService.callTextModel({
           messages: retryMessages,
+          outputFormat: { type: 'json' },
           temperature: 0.35,
           stream: true,
           fallbackToNonStreamOnGatewayTimeout: true,

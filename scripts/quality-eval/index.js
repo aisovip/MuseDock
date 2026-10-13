@@ -234,11 +234,7 @@ async function scoreWithVisionModel({ contactSheetPath, topicInput, visionModelI
       { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
     ],
   }];
-  let result = await callTextModel({ messages, temperature: 0, response_format: { type: 'json_object' }, textConfig });
-  if (!result.success) {
-    // 部分 provider 不支持 response_format，去掉重试一次
-    result = await callTextModel({ messages, temperature: 0, textConfig });
-  }
+  const result = await callTextModel({ messages, temperature: 0, outputFormat: { type: 'json' }, textConfig });
   if (!result.success) {
     return { error: result.message || '视觉模型调用失败' };
   }

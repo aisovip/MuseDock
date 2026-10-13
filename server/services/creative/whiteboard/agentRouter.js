@@ -15,6 +15,7 @@ function buildContextBlock(context = {}) {
   if (context.stageLabel) lines.push(`当前阶段：${context.stageLabel}${context.gateTitle ? `（${context.gateTitle}）` : ''}。`);
   if (context.progressMessage) lines.push(`当前状态：${context.progressMessage}。`);
   if (context.lastError) lines.push(`最近一次错误：${context.lastError}。`);
+  if (context.opening) lines.push(`当前提问开场（卡片叠放）：${JSON.stringify(context.opening.question)}。可在调整制作设置中单独编辑问题。`);
   if (Array.isArray(context.scenes) && context.scenes.length) {
     lines.push('可用幕列表（序号. 标题 [id]，括号内为已完成产物）：');
     for (const scene of context.scenes) {
@@ -91,7 +92,7 @@ async function classifyIntent({ message, context, services = {}, onRequest } = {
     messages: intentMessages({ message, context }),
     temperature: 0,
     maxTokens: 600,
-    response_format: { type: 'json_object' },
+    outputFormat: { type: 'json' },
     requestTimeoutMs: 60000,
     maxRetries: 1,
   });

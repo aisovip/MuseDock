@@ -14,12 +14,13 @@ const { createCreativeTaskRegistry } = require('../../server/services/creative/c
 const { parseSrt } = require('../../server/services/creative/whiteboard/contracts');
 
 async function main() {
+  const opening = process.argv.includes('--opening');
   const silent = process.argv.includes('--silent');
   const subtitles = process.argv.includes('--subtitles');
   const bgmOnly = process.argv.includes('--bgm') || silent || subtitles;
   const projectRoot = path.resolve(__dirname, '../..');
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'musedock-whiteboard-browser-'));
-  const screenshots = path.join(projectRoot, '.codex-runtime', subtitles ? 'whiteboard-subtitle-style-qa' : 'whiteboard-phase0-qa');
+  const screenshots = path.join(projectRoot, '.codex-runtime', opening ? 'whiteboard-opening-qa' : subtitles ? 'whiteboard-subtitle-style-qa' : 'whiteboard-phase0-qa');
   await fs.mkdir(screenshots, { recursive: true });
   let sequence = 0;
   let modelCalls = 0;
@@ -51,6 +52,7 @@ async function main() {
         return { success: true, text: JSON.stringify({
           schemaVersion: 1, title: revisionRequest ? '从两分钟的小动作开始' : '先做两分钟，让任务动起来',
           summary: '用日常场景解释开始行动的阻力，再给出拆小任务、限定两分钟和立即行动的方法。',
+          ...(input.opening ? { openingQuestion: input.opening.question || '为什么总是难以开始？' } : {}),
           cues, scenes: cues.map((cue, index) => ({
             id: `scene_${index + 1}`, title: ['找到开始的阻力', '把任务变具体', '先行动两分钟', '写下下一个动作'][index] || `分镜 ${index + 1}`,
             cueIds: [cue.id], imagePrompt: [
@@ -109,6 +111,44 @@ async function main() {
     }, color);
     await page.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     await page.goto(`${origin}/creative`);
+    if (opening) {
+      await page.getByRole('tab', { name: /线稿白板动画/ }).click();
+      await page.getByLabel('白板主题内容').fill('解释拖延与如何开始行动');
+      await page.getByRole('combobox', { name: '视频开头', exact: true }).click();
+      await page.getByRole('option', { name: '提问模式 · 卡片叠放', exact: true }).click();
+      assert.equal(await page.getByLabel('开场问题（可选）').inputValue(), '');
+      await page.screenshot({ path: path.join(screenshots, 'create-desktop.png'), fullPage: true });
+      await page.getByRole('button', { name: '启动白板创作 Agent', exact: true }).click();
+      assert.equal(await page.getByRole('combobox', { name: '视频开头', exact: true }).isDisabled(), true);
+      releaseCreation();
+      await page.waitForURL(/\/creative\/\d+/);
+      await page.getByRole('button', { name: '确认内容与制作方案', exact: true }).waitFor();
+      assert.deepEqual(requests[0].input.opening, { mode: 'question', question: '' });
+      await page.getByText('为什么总是难以开始？', { exact: true }).first().waitFor();
+      await page.getByRole('button', { name: '调整制作设置', exact: true }).click();
+      await page.getByLabel('开场问题', { exact: true }).fill('怎样迈出第一步？');
+      await page.getByRole('button', { name: '保存为新的待确认版本', exact: true }).click();
+      await page.getByText('v2', { exact: true }).waitFor();
+      assert.equal(modelCalls, 1);
+      await page.reload();
+      await page.getByText('怎样迈出第一步？', { exact: true }).first().waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: path.join(screenshots, 'review-mobile.png'), fullPage: true });
+      await page.getByRole('button', { name: '调整制作设置', exact: true }).click();
+      await page.getByLabel('开场问题', { exact: true }).fill('');
+      assert.equal(await page.getByRole('button', { name: '保存为新的待确认版本', exact: true }).isDisabled(), true);
+      await page.getByRole('combobox', { name: '视频开头', exact: true }).click();
+      await page.getByRole('option', { name: '直接开始正文', exact: true }).click();
+      await page.getByRole('button', { name: '保存为新的待确认版本', exact: true }).click();
+      await page.getByText('v3', { exact: true }).waitFor();
+      const view = await workflows.getCreativeWorkflow(page.url().split('/').at(-1), options);
+      assert.equal(view.data.whiteboard.current.artifact.opening, undefined);
+      assert.equal(modelCalls, 1);
+      assert.deepEqual(runtimeErrors, []);
+      console.log(JSON.stringify({ success: true, checks: ['开场选择与提交', '自动问题展示', '保存问题不重写正文或调用模型', '刷新保留', '390px无横向溢出', '空问题校验', '关闭开场'], realProviderCalls: 0, screenshots }));
+      return;
+    }
     const hfTab = page.getByRole('tab', { name: 'HyperFrames 动态视频' });
     const wbTab = page.getByRole('tab', { name: /线稿白板动画/ });
     await page.getByLabel('输入视频方向、抖音链接、微信公众号文章或 GitHub 仓库链接').fill('一场有关咖啡的动态视频');

@@ -44,6 +44,7 @@ async function testEnabledAnalyzesArticleImageWithMultimodalJson() {
         assert.equal(request.provider, 'openai-compatible');
         assert.equal(request.modelId, 'vision-model');
         assert.equal(request.textConfig.modelId, 'vision-model');
+        assert.deepEqual(request.outputFormat, { type: 'json' });
         assert.ok(Array.isArray(request.messages[0].content));
         assert.equal(request.messages[0].content[0].type, 'text');
         assert.equal(request.messages[0].content[1].type, 'image_url');

@@ -1,6 +1,7 @@
 const { WhiteboardError, sha256, subtitleStyleFor } = require('./contracts');
 
 const { CAPTION_LAYOUT_VERSION, letters, splitCaption, srtText } = require('../shared/captionLayout');
+const { OPENING_CUE_ID, narrationCues } = require('../shared/videoOpening');
 
 function captionText(text) { return text.replace(/\s+/gu, ' ').trim(); }
 
@@ -31,11 +32,14 @@ function buildNarrationTiming(artifact, evidence, durationMs, { fontSize = null,
   const characters = wordCharacters(evidence, durationMs);
   const sourceLetters = letters(artifact.narrationText).join('');
   if (characters.map(item => item.character).join('') !== sourceLetters) {
+    if (artifact.opening && characters.map(item => item.character).join('') === letters(artifact.cues.map(cue => cue.text).join('')).join('')) {
+      throw new WhiteboardError('NARRATION_TEXT_MISMATCH', '完整旁白缺少已确认的提问开场，现有音频只包含正文。音频已保留，请检查后决定是否重新生成完整旁白。');
+    }
     throw new WhiteboardError('NARRATION_TEXT_MISMATCH', '完整旁白的原生字幕与已确认正文不一致。音频已保留，请检查后决定是否重新生成。');
   }
   let offset = 0;
   const captions = [];
-  const cueTimings = artifact.cues.map(cue => {
+  const cueTimings = narrationCues(artifact).map(cue => {
     const count = letters(cue.text).length;
     if (!count) throw new WhiteboardError('NARRATION_TEXT_MISMATCH', '旁白中存在没有可朗读文字的字幕。');
     const startMs = characters[offset].startMs;
@@ -54,7 +58,10 @@ function buildNarrationTiming(artifact, evidence, durationMs, { fontSize = null,
 
 function materializeTiming(artifact, cueTimings, captions, durationMs, provider, minSceneDurationMs = 800) {
   const byId = new Map(cueTimings.map(cue => [cue.id, cue]));
-  let startMs = 0;
+  const question = artifact.opening ? byId.get(OPENING_CUE_ID) : null;
+  const opening = question ? { ...artifact.opening, cueId: OPENING_CUE_ID, startMs: 0,
+    endMs: Math.round((question.endMs + byId.get(artifact.cues[0].id).startMs) / 2) } : null;
+  let startMs = opening?.endMs || 0;
   const scenes = artifact.scenes.map((scene, index) => {
     const nextScene = artifact.scenes[index + 1];
     const endMs = nextScene ? Math.round((byId.get(scene.cueIds.at(-1)).endMs + byId.get(nextScene.cueIds[0]).startMs) / 2) : durationMs;
@@ -65,10 +72,29 @@ function materializeTiming(artifact, cueTimings, captions, durationMs, provider,
   });
   return { schemaVersion: 1, captionLayoutVersion: CAPTION_LAYOUT_VERSION,
     timingKind: provider === 'disabled' ? 'source_srt' : 'provider_native_words', provider,
-    durationMs, sourceTextSha256: sha256(artifact.narrationText), cues: cueTimings, captions, scenes };
+    durationMs, sourceTextSha256: sha256(artifact.narrationText), cues: cueTimings, captions, scenes,
+    ...(opening ? { opening } : {}) };
 }
 
 function buildSilentTiming(artifact, { fontSize = null, referenceOnly = false } = {}) {
+  if (artifact.opening) {
+    const { opening, ...body } = artifact;
+    const timing = buildSilentTiming(body, { fontSize, referenceOnly });
+    const offset = opening.estimatedDurationMs;
+    const shift = item => ({ ...item, startMs: item.startMs + offset, endMs: item.endMs + offset });
+    const parts = splitCaption(opening.question, artifact.narrationLanguage, artifact.aspectRatio, fontSize);
+    const total = parts.reduce((sum, text) => sum + text.length, 0);
+    let cursor = 0;
+    const captions = parts.map((text, index) => {
+      const startMs = Math.round(offset * cursor / total);
+      cursor += text.length;
+      return { id: `${OPENING_CUE_ID}_${index + 1}`, sourceCueId: OPENING_CUE_ID, text: captionText(text), startMs, endMs: Math.round(offset * cursor / total) };
+    });
+    return { ...timing, durationMs: timing.durationMs + offset,
+      opening: { ...opening, cueId: OPENING_CUE_ID, startMs: 0, endMs: offset },
+      cues: [{ id: OPENING_CUE_ID, text: opening.question, startMs: 0, endMs: offset }, ...timing.cues.map(shift)],
+      captions: [...captions, ...timing.captions.map(shift)], scenes: timing.scenes.map(shift) };
+  }
   if (!['source_srt', 'provisional'].includes(artifact.timingKind)) {
     throw new WhiteboardError('TIMELINE_INVALID', '无旁白制作需要已确认的计划时间轴或输入 SRT 时间轴，请重新确认内容与制作方案。');
   }
@@ -132,7 +158,7 @@ function buildDisplayCaptions(artifact, timing, fontSize, evidence) {
     if (!evidence) throw new WhiteboardError('NARRATION_EVIDENCE_INVALID', '调整字幕字号需要已保存的同次原生字幕，请先检查旁白产物。');
     display = buildNarrationTiming(artifact, evidence, timing.durationMs, { fontSize });
   } else {
-    display = buildSilentTiming({ ...artifact, cues: timing.cues, scenes: timing.scenes, durationMs: timing.durationMs,
+    display = buildSilentTiming(artifact.opening ? artifact : { ...artifact, cues: timing.cues, scenes: timing.scenes, durationMs: timing.durationMs,
       timingKind: timing.timingKind === 'planned' ? 'provisional' : timing.timingKind }, { fontSize });
   }
   if (sha256({ cues: display.cues, scenes: display.scenes }) !== sha256({ cues: timing.cues, scenes: timing.scenes })) {

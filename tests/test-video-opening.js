@@ -1,0 +1,66 @@
+const assert = require('node:assert/strict');
+const { normalizeInput, materializeCandidate, validateCandidate, candidateContractFor } = require('../server/services/creative/whiteboard/contracts');
+const { buildSilentTiming, buildNarrationTiming, buildDisplayCaptions, letters } = require('../server/services/creative/whiteboard/narrationTiming');
+const { OPENING_CUE_ID, narrationScenes } = require('../server/services/creative/shared/videoOpening');
+const { createTextPrompt } = require('../server/services/ai/doubaoTts');
+
+const input = normalizeInput({ inputMode: 'text', content: '先画圆形。再画方形。', rewritePolicy: 'preserve', targetDurationSeconds: 15 });
+const base = { schemaVersion: 1, title: '绘制顺序', summary: '按原文顺序绘图。',
+  cues: [{ id: 'cue_1', text: '先画圆形。' }, { id: 'cue_2', text: '再画方形。' }],
+  scenes: [{ id: 'scene_1', title: '第一步', cueIds: ['cue_1'], imagePrompt: '画面中央呈现一个圆形。' },
+    { id: 'scene_2', title: '第二步', cueIds: ['cue_2'], imagePrompt: '画面中央呈现一个方形。' }] };
+const old = materializeCandidate(base, input, {});
+assert.equal(Object.hasOwn(old, 'opening'), false);
+assert.deepEqual(normalizeInput({ ...input, opening: { mode: 'disabled' } }), input);
+assert.deepEqual(candidateContractFor(input).schema.required, ['schemaVersion', 'title', 'summary', 'cues', 'scenes']);
+const enabled = normalizeInput({ ...input, opening: { mode: 'question', question: '' } });
+assert.ok(validateCandidate(base, enabled).some(error => error.includes('openingQuestion')));
+const candidate = { ...base, openingQuestion: '怎么画？' };
+assert.deepEqual(validateCandidate(candidate, enabled), []);
+assert.ok(validateCandidate({ ...candidate, cues: [{ id: 'cue_1', text: '改写了正文。' }, base.cues[1]] }, enabled).some(error => error.includes('保留原文')));
+assert.ok(validateCandidate(candidate, { ...enabled, opening: { mode: 'question', question: '为什么？' } }).some(error => error.includes('逐字')));
+assert.throws(() => normalizeInput({ ...input, opening: { mode: 'unknown' } }));
+assert.throws(() => normalizeInput({ ...input, opening: { mode: 'question', question: '。' } }));
+assert.throws(() => normalizeInput({ ...input, opening: { mode: 'question', question: '字'.repeat(161) } }));
+const artifact = materializeCandidate(candidate, enabled, {});
+assert.equal(artifact.narrationText, '怎么画？\n先画圆形。\n再画方形。');
+assert.deepEqual(artifact.cues, old.cues);
+assert.equal(artifact.sourceTextSha256, old.sourceTextSha256);
+const passages = narrationScenes(artifact);
+assert.equal(passages[0].text, artifact.opening.question);
+assert.equal(passages[0].startMs, 0);
+assert.equal(passages[0].endMs, artifact.opening.estimatedDurationMs);
+assert.deepEqual(passages.slice(1).map(scene => [scene.startMs, scene.endMs]),
+  old.scenes.map(scene => [scene.startMs + 3000, scene.endMs + 3000]));
+const prompt = createTextPrompt({ text: artifact.narrationText, scenes: passages });
+const readText = [...prompt.matchAll(/「([^」]*)」/g)].map(match => match[1]).filter(Boolean).join('\n');
+assert.equal(readText, artifact.narrationText);
+assert.equal(prompt.split('「怎么画？」').length - 1, 1);
+assert.deepEqual(narrationScenes(old).map(scene => [scene.startMs, scene.endMs]), old.scenes.map(scene => [scene.startMs, scene.endMs]));
+const silent = buildSilentTiming(artifact);
+assert.equal(silent.opening.endMs, 3000);
+assert.equal(silent.durationMs, 18000);
+assert.equal(silent.cues[0].id, OPENING_CUE_ID);
+assert.equal(silent.cues[1].startMs, old.cues[0].startMs + 3000);
+assert.equal(silent.scenes[0].startMs, 3000);
+assert.ok(buildDisplayCaptions(artifact, silent, 72).length > 0);
+const source = normalizeInput({ inputMode: 'srt', content: '1\n00:00:01,000 --> 00:00:04,000\n先画圆形。\n\n2\n00:00:05,000 --> 00:00:08,000\n再画方形。', opening: enabled.opening });
+const srt = materializeCandidate(candidate, source, {});
+const sourceTiming = buildSilentTiming(srt);
+assert.equal(sourceTiming.cues[1].startMs, 4000);
+assert.equal(sourceTiming.cues[1].endMs, 7000);
+assert.equal(sourceTiming.cues[2].startMs, 8000);
+assert.equal(sourceTiming.durationMs, 11000);
+assert.ok(buildDisplayCaptions(srt, sourceTiming, 72).length > 0);
+const words = letters(artifact.narrationText).map((text, i) => ({ text, start_time: i * 250 + 100, end_time: (i + 1) * 250 }));
+const evidence = { provider: 'minimax', words };
+const bodyOnly = { provider: 'minimax', words: letters(old.narrationText).map((text, i) => ({ text, start_time: i * 250 + 100, end_time: (i + 1) * 250 })) };
+assert.throws(() => buildNarrationTiming(artifact, bodyOnly, 5000), error => error.code === 'NARRATION_TEXT_MISMATCH' && error.message.includes('缺少已确认的提问开场'));
+const narrated = buildNarrationTiming(artifact, evidence, 5000);
+assert.equal(narrated.opening.endMs, 800);
+assert.equal(narrated.scenes[0].startMs, 800);
+assert.equal(narrated.cues[1].startMs, 850);
+assert.equal(narrated.cues[0].text, '怎么画？');
+assert.ok(buildDisplayCaptions(artifact, narrated, 72, evidence).length > 0);
+assert.deepEqual(buildSilentTiming(old).scenes.map(scene => scene.startMs), [0, 7500]);
+console.log('PASS 提问合同、旧任务关闭兼容、原文保护、完整旁白、原生时间戳、静音/SRT 偏移及字幕重排');

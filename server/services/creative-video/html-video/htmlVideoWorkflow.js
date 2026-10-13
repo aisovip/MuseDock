@@ -1379,6 +1379,7 @@ async function loadProjectForWorkflow({ workflowId, projectDir, rootDir }) {
 
 async function parseEditInstruction({ model, project, instruction }) {
   const response = await model.callTextModel({
+    outputFormat: { type: 'json' },
     messages: [{
       role: 'user',
       content: [

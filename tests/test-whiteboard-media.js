@@ -11,22 +11,24 @@ const models = require('../server/services/creative/whiteboard/mediaModels');
 const { sha256, canvasFor, subtitleStyleFor } = require('../server/services/creative/whiteboard/contracts');
 
 const portrait = process.argv.includes('--portrait');
+const openingTest = process.argv.includes('--opening');
 const aspectRatio = portrait ? '9:16' : '16:9';
 const canvas = canvasFor(aspectRatio);
 
 const sourceSrt = '1\n00:00:00,000 --> 00:00:03,000\n先画圆形。\n\n2\n00:00:03,000 --> 00:00:06,000\n再画方形。\n';
 const candidate = { schemaVersion: 1, title: '线稿媒体集成测试', summary: '先展示圆形，再展示方形。',
+  ...(openingTest ? { openingQuestion: '怎么画？' } : {}),
   cues: [{ id: 'cue_1', text: '先画圆形。' }, { id: 'cue_2', text: '再画方形。' }],
   scenes: [{ id: 'scene_1', title: '圆形', cueIds: ['cue_1'], imagePrompt: '纸面上一个清晰圆形，少量彩色，留白充分。' },
     { id: 'scene_2', title: '方形', cueIds: ['cue_2'], imagePrompt: '纸面上一个清晰方形，少量彩色，留白充分。' }] };
 
 function nativeResponse(audio) {
-  const sentences = ['先画圆形。', '再画方形。'].map((text, index) => ({ text, start_time: index * 3000,
+  const sentences = [...(openingTest ? ['怎么画？'] : []), '先画圆形。', '再画方形。'].map((text, index) => ({ text, start_time: index * 3000,
     end_time: index * 3000 + 2200, words: Array.from(text).map((word, n) => ({ text: word,
       start_time: index * 3000 + 100 + Math.min(n, 4) * 420,
       end_time: index * 3000 + 100 + Math.min(n, 4) * 420 + (n === 4 ? 0 : 400),
     })) }));
-  return { audio: audio.toString('base64'), duration: 6, original_duration: 6,
+  return { audio: audio.toString('base64'), duration: openingTest ? 9 : 6, original_duration: openingTest ? 9 : 6,
     subtitle: { text: sentences.map(item => item.text).join(''), sentences } };
 }
 
@@ -44,7 +46,7 @@ async function setup() {
     'ok,b=cv2.imencode(".png",a)', 'b.tofile(sys.argv[1])',
   ].join(';'), path.join(root, 'fixture.png')]);
   await mediaTools.execute(runtime.ffmpeg, ['-v', 'error', '-n', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=24000',
-    '-t', '6', '-ac', '1', '-c:a', 'pcm_s16le', path.join(root, 'fixture.wav')]);
+    '-t', openingTest ? '9' : '6', '-ac', '1', '-c:a', 'pcm_s16le', path.join(root, 'fixture.wav')]);
   const png = await fs.readFile(path.join(root, 'fixture.png'));
   const audio = await fs.readFile(path.join(root, 'fixture.wav'));
   const calls = { tts: 0, image: 0, draft: 0, vision: 0, annotation: 0, realProviderCalls: 0 };
@@ -58,6 +60,14 @@ async function setup() {
     aiModelConfig: { getRuntimeConfig: async type => configs[type] },
     fetchImpl: async (url, init) => {
       assert.equal(url, 'https://openspeech.bytedance.com/api/v3/tts/create');
+      const prompt = JSON.parse(init.body).text_prompt;
+      const spoken = [...prompt.matchAll(/「([^」]*)」/g)].map(match => match[1]).filter(Boolean).join('');
+      assert.equal(spoken.replace(/\s+/gu, ''), [...(openingTest ? [candidate.openingQuestion] : []), ...candidate.cues.map(cue => cue.text)].join(''));
+      if (openingTest) {
+        assert.ok(prompt.includes('0.00 至 2.30 秒'));
+        assert.ok(prompt.includes('3.00 至 5.30 秒'));
+        assert.equal(prompt.split('「怎么画？」').length - 1, 1);
+      }
       calls.tts += 1;
       if (ttsOverride) return ttsOverride(url, init);
       return { ok: true, status: 200, json: async () => nativeResponse(audio) };
@@ -291,7 +301,7 @@ async function testSubtitleStyles(ctx) {
   if (process.argv.includes('--subtitle-timing')) return testSubtitleTiming(ctx);
   if (process.argv.includes('--subtitles')) return testSubtitleStyles(ctx);
   if (process.argv.includes('--silent')) return testSilentMedia(ctx);
-  const id = await ctx.create();
+  const id = await ctx.create(false, openingTest ? { input: { opening: { mode: 'question', question: '' } } } : {});
   const start = await ctx.action(id, 'start_production');
   assert.equal(start.success, true, start.message);
   let oldPayload;
@@ -328,7 +338,7 @@ async function testSubtitleStyles(ctx) {
   assert.equal(record.status, 'done');
   assert.equal(ctx.calls.tts, 1); assert.equal(ctx.calls.image, 2);
   const final = record.whiteboard.media.current.final_delivery;
-  assert.equal(final.validation.frameCount, 360); assert.equal(final.validation.audio, true);
+  assert.equal(final.validation.frameCount, openingTest ? 540 : 360); assert.equal(final.validation.audio, true);
   assert.equal(record.whiteboard.media.approvals.length, 5);
   const file = await workflows.getWhiteboardMediaFile(id, final.video.id, ctx.options);
   assert.equal(file.success, true);
@@ -337,6 +347,26 @@ async function testSubtitleStyles(ctx) {
   assert.equal(info.streams[0].width, canvas.width);
   assert.equal(info.streams[0].height, canvas.height);
   assert.equal(info.streams[1].codec_name, 'aac');
+  if (openingTest) {
+    const timing = await mediaStore.readData(record, record.whiteboard.media.current.full_narration.timeline, ctx.rootDir);
+    assert.equal(timing.opening.endMs, 2220);
+    assert.equal(timing.scenes[0].startMs, 2220);
+    assert.equal(timing.cues[1].startMs, 3100);
+    assert.equal(timing.cues[1].text, '先画圆形。');
+    assert.equal(timing.cues[2].text, '再画方形。');
+    assert.deepEqual(final.opening.images, candidate.scenes.map(scene => ({ sceneId: scene.id, sha256: record.whiteboard.media.lineart[scene.id].image.sha256 })));
+    const receipt = await mediaStore.readData(record, final.receipt, ctx.rootDir);
+    assert.deepEqual(receipt.openingReceipt.appearances.map(row => row.index), [0, 1]);
+    assert.equal(receipt.openingReceipt.frameCount, 134);
+    assert.equal(receipt.openingReceipt.validation.decoded, true);
+    assert.equal(ctx.calls.tts, 1);
+    const openingFile = (await mediaStore.mediaFile(record, final.openingVideo, ctx.rootDir)).path;
+    const openingInfo = await mediaTools.probe(openingFile, ctx.runtime);
+    assert.equal(openingInfo.streams.length, 1);
+    assert.equal(Number(openingInfo.streams[0].nb_frames), 134);
+    console.log('PASS 提问开场：同次旁白、正文原文、原生时间边界、全部图片顺序、独立开场、540 帧成片和完整解码；外部服务调用 0');
+    return;
+  }
   await assert.rejects(mediaTools.validateVideo(file.file_path, { frameCount: 360, audio: true, durationMs: 6000,
     canvas: { width: canvas.height, height: canvas.width } }, ctx.runtime), error => error.code === 'VIDEO_INVALID');
 

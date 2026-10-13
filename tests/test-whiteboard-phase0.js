@@ -19,6 +19,7 @@ function candidateFor(request, title = '从一个小动作开始') {
     : [{ id: 'cue_1', text: input.inputMode === 'text' ? input.content : '面对复杂任务时，我们常常先寻找更容易的事情。把任务拆成一个今天就能完成的小动作，开始就会变得具体。' }];
   return {
     schemaVersion: 1, title, summary: '先解释拖延的感受，再用一个具体的小动作说明如何开始。', cues,
+    ...(input.opening ? { openingQuestion: input.opening.question || '为什么总是难以开始？' } : {}),
     scenes: cues.map((cue, index) => ({ id: `scene_${index + 1}`, title: `开始行动 ${index + 1}`, cueIds: [cue.id], imagePrompt: '暖米黄纸张上，一个人把大纸张拆成三张小纸条，粗黑轮廓和少量平涂，主体分离，四周留白。' })),
   };
 }
@@ -183,6 +184,33 @@ const cases = [
     const historical = await workflows.getWhiteboardArtifact(id, first.whiteboard.current.attemptId, ctx.options);
     assert.equal(historical.current, false);
     assert.equal(historical.artifact.title, first.whiteboard.current.artifact.title);
+  })],
+  ['提问开场自动拟定、编辑和开关生成新版本，保留正文且不追加模型请求', () => fixture(async ctx => {
+    const id = await ctx.create({ ...TOPIC, inputMode: 'text', rewritePolicy: 'preserve', content: '先把任务拆小。', opening: { mode: 'question', question: '' } });
+    const first = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(first.status, 'waiting_approval', first.message);
+    const original = first.whiteboard.current.artifact;
+    assert.equal(original.opening.question, '为什么总是难以开始？');
+    assert.match(ctx.modelCalls[0].messages[0].content, /不加入 cues 或 scenes/);
+    assert.equal((await ctx.action(id, 'update_plan', { productionPlan: { handDisplayMode: 'hide' } })).success, true);
+    let next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening.question, original.opening.question);
+    assert.deepEqual(next.whiteboard.current.artifact.cues, original.cues);
+    await ctx.action(id, 'approve_initial', { confirmed: true });
+    assert.equal((await ctx.action(id, 'update_plan', { input: { opening: { mode: 'question', question: '怎样迈出第一步？' } } })).success, true);
+    next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening.question, '怎样迈出第一步？');
+    assert.equal(next.whiteboard.initialApproval, null);
+    assert.equal(next.whiteboard.approvals[0].stale, true);
+    assert.deepEqual(next.whiteboard.current.artifact.cues, original.cues);
+    assert.equal((await ctx.action(id, 'update_plan', { input: { opening: { mode: 'disabled' } } })).success, true);
+    next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening, undefined);
+    assert.equal(next.whiteboard.current.artifact.narrationText, '先把任务拆小。');
+    assert.equal((await ctx.action(id, 'update_plan', { input: { opening: { mode: 'question', question: '' } } })).code, 'INVALID_OPENING');
+    assert.equal(ctx.modelCalls.length, 1);
+    const history = await workflows.getWhiteboardArtifact(id, first.whiteboard.current.attemptId, ctx.options);
+    assert.equal(history.artifact.opening.question, original.opening.question);
   })],
   ['制作设置只生成本地新版本，不额外调用模型', () => fixture(async ctx => {
     const id = await ctx.create();

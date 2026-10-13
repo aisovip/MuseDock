@@ -21,6 +21,8 @@ import { WhiteboardMediaPanel } from './WhiteboardMediaPanel.jsx';
 import { WhiteboardCoverageReview } from './WhiteboardCoverageReview.jsx';
 import { whiteboardCanvasLabel, validateSubtitleSettings } from './whiteboardForm.js';
 import { ApiCallLogLink } from '@/components/diagnostics/ApiCallLogLink.jsx';
+import { QuestionOpeningFields } from '../shared/QuestionOpeningFields.jsx';
+import { openingFormValue, validateOpening } from '../shared/openingForm.js';
 
 export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, onAction, onStopAndDelete, progressEvents = [] }) {
   const [revision, setRevision] = useState('');
@@ -30,6 +32,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
   const [coverageReview, setCoverageReview] = useState(null);
   const [planOpen, setPlanOpen] = useState(false);
   const [editedPlan, setEditedPlan] = useState(null);
+  const [editedOpening, setEditedOpening] = useState({ mode: 'disabled', question: '' });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySource, setHistorySource] = useState('history');
   const [historyArtifact, setHistoryArtifact] = useState(null);
@@ -88,6 +91,9 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
     if (actionLock.current || locked || (!allowed.has(action) && !(action === 'message' && canMessage))) return;
     if (action === 'update_plan' && validateSubtitleSettings(extras.productionPlan)) {
       setError(validateSubtitleSettings(extras.productionPlan)); return;
+    }
+    if (action === 'update_plan' && validateOpening(extras.input?.opening, { allowEmpty: false })) {
+      setError(validateOpening(extras.input.opening, { allowEmpty: false })); return;
     }
     actionLock.current = true;
     setBusy(action);
@@ -230,7 +236,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
                         {item.interactionId && interactions.find(interaction => interaction.id === item.interactionId) ? <WhiteboardConversationCard
                           interaction={interactions.find(interaction => interaction.id === item.interactionId)}
                           active={pendingInteraction?.id === item.interactionId} artifact={artifact} disabled={locked}
-                          allowed={allowed} onConfirm={confirmId => { if (confirmId === 'accept_low_coverage') openCoverageReview(); else { setError(''); setConfirm(confirmId); } }} onUpdatePlan={productionPlan => act('update_plan', { productionPlan })} /> : null}
+                          allowed={allowed} onConfirm={confirmId => { if (confirmId === 'accept_low_coverage') openCoverageReview(); else { setError(''); setConfirm(confirmId); } }} onUpdatePlan={(productionPlan, opening) => act('update_plan', { productionPlan, input: { opening } })} /> : null}
                       </MessageContent>
                     </Message>
                   </MessageScrollerItem>
@@ -273,7 +279,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
             ) : null}
             <div className="flex flex-wrap gap-2">
               {allowed.has('approve_initial') && !pendingInteraction ? <Button type="button" disabled={locked} onClick={() => { setError(''); setConfirm('approve_initial'); }}><Check size={15} />确认内容与制作方案</Button> : null}
-              {allowed.has('update_plan') && artifact && (!pendingInteraction || media) ? <Button type="button" variant="outline" disabled={locked} onClick={() => { setEditedPlan({ ...artifact.productionPlan }); setPlanOpen(true); setError(''); }}><Settings2 size={14} />制作设置</Button> : null}
+              {allowed.has('update_plan') && artifact && (!pendingInteraction || media) ? <Button type="button" variant="outline" disabled={locked} onClick={() => { setEditedPlan({ ...artifact.productionPlan }); setEditedOpening(openingFormValue(artifact)); setPlanOpen(true); setError(''); }}><Settings2 size={14} />制作设置</Button> : null}
               {allowed.has('start_production') ? <Button type="button" disabled={locked} onClick={() => act('start_production')}>开始制作视频</Button> : null}
               {allowed.has('recover_annotation_preview') ? <Button type="button" disabled={locked} onClick={() => act('recover_annotation_preview')}>恢复落墨预览</Button> : null}
               {allowed.has('retry_media') ? <Button type="button" variant={allowed.has('accept_low_coverage') ? 'outline' : 'default'} disabled={locked} onClick={() => act('retry_media')}>{whiteboard.allowedActions.find(action => action.id === 'retry_media').label}</Button> : null}
@@ -351,9 +357,10 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
       <Dialog open={planOpen} onOpenChange={open => { if (!busy) setPlanOpen(open); }}>
         <DialogContent className="max-h-[calc(100dvh-32px)] w-[min(480px,calc(100vw-32px))] overflow-y-auto max-[760px]:[&_button]:min-h-11" showCloseButton={!busy}>
           <DialogHeader><DialogTitle>调整制作方案</DialogTitle><DialogDescription>保留正文和分镜，生成新的待确认版本。</DialogDescription></DialogHeader>
+          <QuestionOpeningFields value={editedOpening} onChange={setEditedOpening} disabled={locked} allowEmpty={false} silent={editedPlan?.narrationMode === 'disabled'} />
           {editedPlan ? <ProductionPlanFields value={editedPlan} aspectRatio={aspectRatio} onChange={setEditedPlan} disabled={locked} /> : null}
           {error ? <p className="m-0 text-sm text-danger" role="alert">{error}</p> : null}
-          <Button type="button" disabled={locked || !editedPlan || Boolean(validateSubtitleSettings(editedPlan))} onClick={() => act('update_plan', { productionPlan: editedPlan })}>{busy ? <Loader2 size={15} className="animate-spin" /> : null}{busy ? '正在保存制作方案...' : '保存为新的待确认版本'}</Button>
+          <Button type="button" disabled={locked || !editedPlan || Boolean(validateSubtitleSettings(editedPlan)) || Boolean(validateOpening(editedOpening, { allowEmpty: false }))} onClick={() => act('update_plan', { productionPlan: editedPlan, input: { opening: editedOpening } })}>{busy ? <Loader2 size={15} className="animate-spin" /> : null}{busy ? '正在保存制作方案...' : '保存为新的待确认版本'}</Button>
         </DialogContent>
       </Dialog>
 

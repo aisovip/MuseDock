@@ -7,6 +7,7 @@ const { StringDecoder } = require('string_decoder');
 const { resolveFfmpegPath, resolveFfprobePath } = require('../../tts/ttsTimeline');
 const { WhiteboardError, sha256, canvasFor, renderingFor } = require('./contracts');
 const { normalizeRenderProgress, encoderThreadsFor } = require('./renderProgress');
+const { openingRecipe, renderVideoOpening } = require('../shared/videoOpeningRenderer');
 
 const RESOURCE_ROOT = path.join(__dirname, '../../../resources/whiteboard');
 const RENDER_PROFILE = Object.freeze({ width: 1920, height: 1080, fps: 60, codec: 'h264', pixelFormat: 'yuv420p', preset: 'fast', crf: 18 });
@@ -152,7 +153,8 @@ async function preflight(options = {}) {
   const sources = JSON.parse(await fsp.readFile(path.join(RESOURCE_ROOT, 'sources.json'), 'utf8'));
   if (sources.files.find(file => file.file === 'assets/drawing-hand.png')?.sha256 !== handSha256) throw new WhiteboardError('DRAWING_HAND_INVALID', '固定画笔素材缺失或已变化，请恢复配套素材后重试。');
   return { ffmpeg, ffprobe, font, bgm, encoderThreads: encoderThreadsFor(results[4].value.stdout),
-    recipe: { ...RENDER_PROFILE, ...canvasFor(options.aspectRatio), fontSha256, handSha256, sourceSha256, adapterSha256, coreSha256, ...styleRecipe } };
+    recipe: { ...RENDER_PROFILE, ...canvasFor(options.aspectRatio), fontSha256, handSha256, sourceSha256, adapterSha256, coreSha256, ...styleRecipe,
+      ...(options.opening ? { opening: await openingRecipe(hashFile) } : {}) } };
 }
 
 async function probe(file, runtime, options = {}) {
@@ -266,5 +268,12 @@ async function extractFrame(video, output, ms, runtime, options = {}) {
   await execute(runtime.ffmpeg, ['-v', 'error', '-n', '-ss', String(Math.max(0, ms) / 1000), '-i', video, '-frames:v', '1', output], options);
 }
 
+async function renderOpening({ images, question, output, endMs }, runtime, options = {}) {
+  const frameCount = Math.ceil(endMs * 60 / 1000);
+  const result = await renderVideoOpening({ images, question, output, canvas: runtime.recipe, fps: 60, frameCount },
+    { ...runtime, pythonPath: pythonPath(options), execute }, options);
+  return { ...result, validation: await validateVideo(output, { frameCount }, runtime, options) };
+}
+
 module.exports = { RESOURCE_ROOT, RENDER_PROFILE, execute, hashFile, pythonPath, python, preflight, probe,
-  normalizeAudio, validateVideo, renderScene, finalVideo, extractFrame, prepareBackgroundMusic };
+  normalizeAudio, validateVideo, renderScene, renderOpening, finalVideo, extractFrame, prepareBackgroundMusic };

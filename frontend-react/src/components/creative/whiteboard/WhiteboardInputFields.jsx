@@ -9,6 +9,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog.jsx';
 import { validateWhiteboardDraft, validateSubtitleSettings, whiteboardSubtitleStyle, WHITEBOARD_CANVAS_FORMATS } from './whiteboardForm.js';
 import { cn } from '@/lib/utils.js';
+import { QuestionOpeningFields } from '../shared/QuestionOpeningFields.jsx';
 
 export { LabeledSelect } from '../shared/ProductionSettingsFields.jsx';
 
@@ -78,6 +79,7 @@ export function WhiteboardInputFields({ draft, onChange, catalog, disabled }) {
         <LabeledSelect label="视觉模板" value={draft.visualStylePreset} disabled={disabled} onChange={visualStylePreset => change({ visualStylePreset })} options={catalog?.visualPresets || []} />
       </div>
       {selectedPreset?.description ? <p className="m-0 text-xs leading-6 text-fg-3">{selectedPreset.description}</p> : null}
+      <QuestionOpeningFields value={draft.opening} onChange={opening => change({ opening })} disabled={disabled} silent={draft.productionPlan.narrationMode === 'disabled'} />
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line-1 pt-3">
         <p className="m-0 text-xs text-fg-3">先确认方案，再进入制作。两种模式的草稿分别保留。</p>
         <Button type="button" variant="ghost" size="sm" disabled={disabled} className="max-[760px]:min-h-11" onClick={() => setSettingsOpen(true)}><Settings2 size={14} />制作设置</Button>

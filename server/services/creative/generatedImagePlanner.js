@@ -97,7 +97,7 @@ async function planGeneratedImages({ sceneSpec = {}, assetContext = {}, maxScene
       stage: 'gen_images',
       sub_stage: 'plan_generated_images',
     },
-    response_format: { type: 'json_object' },
+    outputFormat: { type: 'json' },
     messages: [{ role: 'user', content: prompt }],
   });
   if (!response || response.success === false) {

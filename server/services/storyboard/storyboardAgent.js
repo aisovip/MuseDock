@@ -384,6 +384,7 @@ async function createStoryboard(options = {}) {
   try {
     modelResult = await modelService.callTextModel({
       messages,
+      outputFormat: { type: 'json' },
       temperature: editableConfig.modelOptions?.temperature ?? 0.35,
       configPath: options.configPath,
       textConfig: options.textConfig,

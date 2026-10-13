@@ -8,8 +8,8 @@ const { defaultWebSearchProvider } = require('../creativeResearchProvider');
 const { runWithApiCallContext, annotateApiCallResult } = require('../../diagnostics/apiCallRecorder');
 const { hash, ErrorType, PLAN_SKELETON, normalizePlan, canvasFor, imagePrompt } = require('./contracts');
 
-const PLAN_RESPONSE_FORMAT = {
-  type: 'json_schema', name: 'illustrated_plan', strict: true,
+const PLAN_OUTPUT_FORMAT = {
+  type: 'json', name: 'illustrated_plan', strict: true,
   schema: {
     type: 'object', additionalProperties: false, required: ['title', 'summary', 'scenes'],
     properties: {
@@ -129,8 +129,7 @@ async function draft(record, config, attempt, options = {}) {
   let response;
   try { response = await context(record, attempt, options, () => (options.services?.aiTextModel || textService).callTextModel({
     textConfig: config, messages, temperature:0.3, maxTokens:16000, maxOutputTokens:16000,
-    ...(config.protocol !== 'anthropic-messages' ? { response_format: config.protocol === 'openai-chat-completions'
-      ? { type: 'json_object' } : PLAN_RESPONSE_FORMAT } : {}),
+    outputFormat: PLAN_OUTPUT_FORMAT,
     reasoningEffort: /^(gpt-(5|6)([.-]|$)|o[134])/i.test(config.modelId) ? 'low' : undefined,
     maxRetries:0, fallbackToNonStreamOnGatewayTimeout:false, requestTimeoutMs:180000, fetchImpl,
   })); } catch { throw classify(null, observed.status, true, '分析模型'); }

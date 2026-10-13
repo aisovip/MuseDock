@@ -94,7 +94,7 @@ async function run() {
   const retried = await call({ maxTokens: 100, maxOutputTokens: 800, reasoningEffort: 'low', maxRetries: 1, retryDelayMs: 1,
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
-      assert.equal(body.max_completion_tokens, 800);
+      assert.equal(body.max_tokens, 800);
       assert.equal(body.reasoning_effort, 'low');
       assert.equal(body.temperature, undefined);
       return json(retries++ ? reply('补齐正文') : { choices: [] });

@@ -1,0 +1,24 @@
+import { useId } from 'react';
+import { Textarea } from '@/components/ui/textarea.jsx';
+import { LabeledSelect } from './ProductionSettingsFields.jsx';
+import { validateOpening } from './openingForm.js';
+
+export function QuestionOpeningFields({ value = { mode: 'disabled', question: '' }, onChange, disabled = false, allowEmpty = true, silent = false }) {
+  const id = useId();
+  const error = validateOpening(value, { allowEmpty });
+  return <div className="grid gap-3">
+    <LabeledSelect label="视频开头" value={value.mode} disabled={disabled} onChange={mode => onChange({ ...value, mode })}
+      options={[{ id: 'disabled', label: '直接开始正文' }, { id: 'question', label: '提问模式 · 卡片叠放' }]} />
+    {value.mode === 'question' ? <>
+      <div className="grid gap-1.5 text-xs font-semibold text-fg-2">
+        <label htmlFor={id}>开场问题{allowEmpty ? '（可选）' : ''}</label>
+        <Textarea id={id} value={value.question || ''} disabled={disabled} maxLength={160} rows={2}
+          placeholder={allowEmpty ? '留空后根据正文拟定，也可以写下你想问的问题。' : '填写开场问题，正文内容保持不变。'}
+          aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
+          onChange={event => onChange({ ...value, question: event.target.value })} />
+      </div>
+      <p className="m-0 text-xs leading-6 text-fg-3">{silent ? '开场显示问题，按阅读时长依次叠放全部成品图，再进入正文；不生成配音。' : '提问时依次叠放全部成品图，问题讲完后进入正文。开场额外计时，与正文一起确认和配音。'}开场始终显示提问文字。</p>
+      {error ? <p id={`${id}-error`} role="alert" className="m-0 text-xs text-danger">{error}</p> : null}
+    </> : null}
+  </div>;
+}

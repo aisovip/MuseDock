@@ -40,6 +40,7 @@ async function planSfxEvents({ model, target, rules, sfxLibrary, scenes } = {}) 
   }
   const response = await model.callTextModel({
     messages: [{ role: 'user', content: buildSfxPlanningPrompt({ target, rules, sfxLibrary, scenes }) }],
+    outputFormat: { type: 'json' },
     audit: { agent: 'sfx-planner', stage: 'audio', sub_stage: 'sfx', attempt: 1 },
   });
   if (!response || response.success === false) {

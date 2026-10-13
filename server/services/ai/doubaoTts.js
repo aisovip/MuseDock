@@ -30,6 +30,10 @@ function createTextPrompt({ text, scenes = [], language = 'zh-CN', settings = {}
     'en-GB': 'Read only in natural British English.',
   }[language];
   if (!languageDirection) throw new Error('旁白语言不受支持。');
+  const compact = value => value.replace(/\s+/gu, '');
+  if (scenes.length && compact(scenes.map(scene => scene.text).join('')) !== compact(text)) {
+    throw new Error('旁白朗读段落与已确认正文不一致，请检查开场与分镜内容；尚未发送语音请求。');
+  }
   const passages = scenes.length ? scenes.map(scene => {
     // Text is assembled from the approved source, never copied by a model.
     const end = Math.max(scene.startMs + 1, scene.endMs - (scene === scenes.at(-1) ? 0 : 700));

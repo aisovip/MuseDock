@@ -222,7 +222,7 @@ async function testVisionDedupesByBytesAndFailsClosed() {
   });
 
   assert.equal(calls, 2, '相同 bytes 只调用一次；不同 bytes 单独调用');
-  assert.equal(requests[0].response_format.type, 'json_object');
+  assert.equal(requests[0].outputFormat.type, 'json');
   assert.match(requests[0].messages[0].content[1].image_url.url, /^data:image\/png;base64,/);
   assert.match(requests[0].messages[0].content[1].image_url.url, new RegExp(Buffer.from('same-bytes').toString('base64')));
   assert.ok(!requests.some(request => ['external-a-must-not-be-read', 'external-b-must-not-be-read']

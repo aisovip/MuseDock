@@ -41,7 +41,7 @@ async function run() {
     onModelResponse: async response => { responses.push(response); },
     callModel: async request => {
       assert.equal(request.maxRetries, 0);
-      if (request.response_format) return { success: false, configured: true, message: '测试网关不支持 JSON 模式。' };
+      assert.deepEqual(request.outputFormat, { type: 'json' });
       const input = JSON.parse(request.messages[1].content);
       batches.push(input.sentences.map(cue => cue.index));
       return { success: true, text: JSON.stringify({ changes: [
@@ -79,7 +79,7 @@ async function run() {
         assert.ok(task.includes(body.instructions), '用户消息保留全部规则，而不只依赖被代理替换的 instructions');
         assert.match(task, /54 到 55/);
         assert.match(task, /不得增删字幕、修改编号或生成时间戳/);
-        assert.equal(body.text?.format, undefined, '不强制使用兼容服务可能不支持的 JSON 模式');
+        assert.deepEqual(body.text.format, { type: 'json_object' }, '字幕校订统一声明 JSON 输出');
         return new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', role: 'assistant',
           content: [{ type: 'output_text', text: JSON.stringify({ changes: [changed] }) }] }] }),
         { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -89,6 +89,20 @@ async function run() {
   assert.equal(wireRequests, 1);
   assert.equal(compatible.sentences[0].text, changed.text);
   assert.deepEqual(cues, original);
+
+  let rejectedCalls = 0;
+  await assert.rejects(proofreadTranscript(cues, {
+    callModel: request => callTextModel({ ...request,
+      textConfig: { enabled: true, protocol: 'openai-chat-completions', apiKey: 'fixture-key',
+        baseUrl: 'https://example.invalid/v1', modelId: 'fixture-model' },
+      fetchImpl: async (_url, options) => {
+        rejectedCalls += 1;
+        assert.deepEqual(JSON.parse(options.body).response_format, { type: 'json_object' });
+        return new Response(JSON.stringify({ error: { message: 'unsupported response_format' } }), { status: 400 });
+      },
+    }),
+  }), error => error.code === 'CORRECTION_FAILED');
+  assert.equal(rejectedCalls, 1, '拒绝 JSON 格式参数时保留失败，不取消约束重发');
 
   for (const text of ['收到。你希望我怎么处理？回复序号即可。', '{"changes":', JSON.stringify({ changes: [{ ...changed, startMs: 0 }] })]) {
     let savedResponse;

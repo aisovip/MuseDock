@@ -307,7 +307,7 @@ async function compressFreeformNarrationWithModel({ modelService, freeformAgent,
       requiredNarrationLiterals,
       hardMaxChars,
     });
-    const response = await modelService.callTextModel({ messages });
+    const response = await modelService.callTextModel({ messages, outputFormat: { type: 'json' } });
     if (!response || response.success === false) {
       return { success: false, message: response?.message || '旁白压缩失败。' };
     }
@@ -356,7 +356,7 @@ async function compressFreeformNarrationWithModel({ modelService, freeformAgent,
 
 async function repairFreeformNarrationWithModel({ modelService, freeformAgent, scenes, issues, transcriptText, targetDurationSec, requiredNarrationLiterals = [] } = {}) {
   const messages = buildFreeformNarrationRepairMessages({ scenes, issues, transcriptText, targetDurationSec, requiredNarrationLiterals });
-  const response = await modelService.callTextModel({ messages });
+  const response = await modelService.callTextModel({ messages, outputFormat: { type: 'json' } });
   if (!response || response.success === false) {
     return { success: false, message: response?.message || '旁白修复失败。' };
   }

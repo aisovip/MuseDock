@@ -17,6 +17,7 @@ function failure(message, extra = {}) {
 async function callTextModel(model, prompt) {
   const response = await model.callTextModel({
     messages: [{ role: 'user', content: prompt }],
+    outputFormat: { type: 'json' },
   });
   if (!response || response.success === false) {
     return failure(response && response.message ? response.message : 'AI 规格生成失败。');

@@ -36,6 +36,32 @@ assert.equal(longPreview.root.children[0].truncated, true);
 assert.ok(longPreview.root.children[0].text.length <= PREVIEW_CHARACTERS);
 assert.equal(longPreview.root.truncated, true);
 
+// 多 MiB 音频字符串曾让 Chrome 的正则引擎栈溢出。
+for (const value of ['A'.repeat(9 * 1024 * 1024), '\\"'.repeat(3 * 1024 * 1024)]) {
+  const large = createJsonPreview(JSON.stringify({ audio: value, after: '未预览' }));
+  assert.ok(large);
+  assert.equal(large.truncated, true);
+  assert.equal(large.root.children.length, 1);
+  assert.equal(large.root.children[0].truncated, true);
+  assert.ok(large.root.children[0].text.length <= PREVIEW_CHARACTERS);
+}
+const giantKey = createJsonPreview(JSON.stringify({ ['键'.repeat(2 * 1024 * 1024)]: 1 }));
+assert.equal(giantKey.truncated, true);
+assert.ok(giantKey.root.children[0].key.length <= PREVIEW_CHARACTERS);
+assert.equal(giantKey.root.children[0].truncated, true);
+const giantScalar = createJsonPreview(JSON.stringify('A'.repeat(9 * 1024 * 1024)));
+assert.equal(giantScalar.root.type, 'string');
+assert.equal(giantScalar.root.truncated, true);
+for (const suffix of ['\\"', '\\\\', '\\u4e2d']) {
+  const boundary = '"' + 'A'.repeat(PREVIEW_CHARACTERS - 2) + suffix + '"';
+  const result = createJsonPreview(boundary);
+  assert.ok(result);
+  assert.equal(result.root.truncated, true);
+  assert.equal(result.root.text.length, PREVIEW_CHARACTERS);
+}
+const veryDeep = createJsonPreview('['.repeat(20000) + '0' + ']'.repeat(20000));
+assert.equal(veryDeep.truncated, true);
+
 const widePreview = createJsonPreview(JSON.stringify(Array.from({ length: 2500 }, (_, index) => index)));
 assert.equal(widePreview.truncated, true);
 assert.ok(widePreview.root.children.length < 2500);

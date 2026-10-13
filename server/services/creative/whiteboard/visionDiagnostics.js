@@ -10,6 +10,7 @@ const DESCRIPTIONS = {
   missing_text: '已收到视觉服务响应，但没有可用的正文内容。',
   invalid_response: '已收到视觉服务响应，但响应格式无法解析。',
   candidate_invalid: '模型返回的编排未通过校验，具体问题如下。',
+  validator_error: '本地视觉候选校验器执行失败，请检查程序后再继续；本次不会自动重新请求模型。',
   timeout: '等待视觉模型响应超时，未取得完整结果。',
   network_error: '视觉模型请求发生网络连接异常，未取得完整结果。',
   request_interrupted: '视觉模型请求中断，无法确认完整结果。',

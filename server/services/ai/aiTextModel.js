@@ -267,6 +267,17 @@ function normalizeProtocol(value) {
   return aiModelConfig.MODEL_PROTOCOLS?.includes(value) ? value : aiModelConfig.DEFAULT_MODEL_PROTOCOL || 'openai-responses';
 }
 
+// 业务只声明输出用途，协议格式在这里统一选择；保留显式 response_format 高级用法。
+function resolveResponseFormat(protocol, outputFormat, explicitFormat) {
+  if (explicitFormat !== undefined) return explicitFormat;
+  if (outputFormat?.type !== 'json') return undefined;
+  if (protocol === 'openai-responses' && outputFormat.schema) {
+    return { type: 'json_schema', name: outputFormat.name || 'structured_output',
+      schema: outputFormat.schema, strict: outputFormat.strict ?? true };
+  }
+  return { type: 'json_object' };
+}
+
 function parseDataUrl(value) {
   const match = normalizeString(value).match(/^data:([^;,]+);base64,(.+)$/);
   return match ? { mediaType: match[1], data: match[2] } : null;
@@ -480,6 +491,7 @@ function buildOpenAiResponsesBody({ modelId, messages, temperature, tools, tool_
 
 function buildChatCompletionsBody({ modelId, messages, temperature, tools, tool_choice, response_format, maxTokens, maxOutputTokens, reasoningEffort, stream }) {
   const tokenLimit = Math.max(1, Number(maxOutputTokens ?? maxTokens) || 4096);
+  const deepSeekFlash = /^deepseek-(?:flash|v4-flash(?:-vision-exp)?)$/i.test(modelId);
   const format = response_format?.type === 'json_schema' && !response_format.json_schema
     ? { type: 'json_schema', json_schema: { name: response_format.name, schema: response_format.schema, strict: response_format.strict } }
     : response_format;
@@ -487,7 +499,8 @@ function buildChatCompletionsBody({ modelId, messages, temperature, tools, tool_
     model: modelId,
     messages,
     ...(reasoningEffort
-      ? { reasoning_effort: reasoningEffort, max_completion_tokens: tokenLimit }
+      ? { reasoning_effort: reasoningEffort, ...(deepSeekFlash
+        ? { max_tokens: tokenLimit } : { max_completion_tokens: tokenLimit }) }
       : { temperature, max_tokens: tokenLimit }),
     ...(tools ? { tools } : {}),
     ...(tool_choice ? { tool_choice } : {}),
@@ -623,7 +636,8 @@ async function callTextModel(options = {}) {
     logger,
     tools,
     tool_choice,
-    response_format,
+    response_format: explicitResponseFormat,
+    outputFormat,
     maxTokens,
     reasoningEffort,
     maxOutputTokens,
@@ -634,6 +648,7 @@ async function callTextModel(options = {}) {
   const config = textConfig || await aiModelConfig.getRuntimeConfig('text', { configPath });
   const provider = normalizeString(config && config.provider);
   const protocol = normalizeProtocol(config && config.protocol);
+  const response_format = resolveResponseFormat(protocol, outputFormat, explicitResponseFormat);
   const apiKey = normalizeString(config && config.apiKey);
   const baseUrl = normalizeBaseUrl(config && config.baseUrl);
   const modelId = normalizeString(config && config.modelId);

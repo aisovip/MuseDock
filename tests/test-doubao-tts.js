@@ -70,6 +70,11 @@ const payload = () => ({ audio: wav().toString('base64'), duration: 1, original_
   assert.throws(() => createTextPrompt({ text: '甲'.repeat(3000) }), /3000/);
   const tooLong = await callTtsModel({ text: '甲'.repeat(3000), ttsConfig: runtime, env: {}, fetchImpl });
   assert.equal(tooLong.code, 'TTS_INPUT_INVALID'); assert.equal(calls, 1);
+  const missingOpening = await callTtsModel({ text: '为什么？\n你好。', ttsConfig: runtime, env: {}, fetchImpl,
+    scenes: [{ text: '你好。', startMs: 0, endMs: 1000 }] });
+  assert.equal(missingOpening.code, 'TTS_INPUT_INVALID');
+  assert.match(missingOpening.message, /尚未发送语音请求/);
+  assert.equal(calls, 1, '朗读段落漏字必须在付费请求之前拒绝');
   const incomplete = await callTtsModel({ text: '你好。', ttsConfig: runtime, env: {}, maxRetries: 10,
     fetchImpl: async () => { calls += 1; return { ok: true, json: async () => ({ ...payload(), subtitle: null }) }; } });
   assert.equal(incomplete.status, 'unknown_external_outcome'); assert.ok(incomplete.audioBuffer); assert.equal(calls, 2);

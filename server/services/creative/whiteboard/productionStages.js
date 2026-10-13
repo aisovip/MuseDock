@@ -11,6 +11,7 @@ const { sceneRenderPool } = require('./sceneRenderPool');
 const { annotationPool } = require('./annotationPool');
 const { imagePool } = require('./imagePool');
 const { scenePrompt } = require('./lineartPrompts');
+const { narrationScenes } = require('../shared/videoOpening');
 
 async function fspExists(file) { try { await fsp.access(file); return true; } catch { return false; } }
 
@@ -50,6 +51,7 @@ async function narrationStage(ctx, artifact) {
   const planned = silent && artifact.timingKind === 'provisional';
   if (!silent && ctx.voice.service.contractHash !== media.voiceService.contractHash) throw new WhiteboardError('VOICE_CONFIG_CHANGED', '旁白服务或声音参数已变化，请重新确认制作设置后生成新版本。', 409);
   const inputIdentity = sha256({ text: artifact.narrationText, language: artifact.narrationLanguage, cues: artifact.cues,
+    ...(artifact.opening ? { opening: artifact.opening } : {}),
     ...(['9:16', '4:3'].includes(artifact.aspectRatio) ? { captionLayout: artifact.aspectRatio } : {}),
     scenes: artifact.scenes.map(({ id, cueIds, startMs, endMs }) => ({ id, cueIds, startMs, endMs })),
     ...(planned ? { timingKind: 'planned' } : {}),
@@ -77,11 +79,10 @@ async function narrationStage(ctx, artifact) {
     if (saved) received = saved;
     else {
       await ctx.requesting(item.id);
-      const cueMap = new Map(artifact.cues.map(cue => [cue.id, cue.text]));
       const result = await (ctx.services.aiTtsModel || aiTtsModel).callTtsModel({
         text: artifact.narrationText, language: artifact.narrationLanguage,
-        durationSeconds: artifact.durationMs / 1000,
-        scenes: artifact.scenes.map(scene => ({ ...scene, text: scene.cueIds.map(id => cueMap.get(id)).join('\n') })),
+        durationSeconds: (artifact.durationMs + (artifact.opening?.estimatedDurationMs || 0)) / 1000,
+        scenes: narrationScenes(artifact),
         ttsConfig: { ...ctx.voice.runtime, enabled: true }, env: {}, nativeWordSubtitles: true,
         maxRetries: 0, requestTimeoutMs: 180000, fetchImpl: ctx.services.fetchImpl, signal: ctx.processOptions.signal,
       });
@@ -302,6 +303,7 @@ async function annotateSceneCandidate(ctx, artifact, timing, scene, canvas) {
     item = await ctx.attempt('annotation_drafting', scene.id, true, inputIdentity);
     await models.structuredVision({ textConfig: ctx.config, images: [image], services: ctx.services,
       validate: candidate => models.validateAnnotation(candidate, canvas, artifact.visualStyle, scene), reasoningEffort: 'medium', prompt,
+      outputSchema: models.annotationOutputSchema(artifact.visualStyle),
       onValidation: diagnostics => ctx.change(current => {
         current.whiteboard.media.attempts.find(row => row.id === item.id).diagnostics = safeVisionDiagnostics(diagnostics);
       }),
@@ -498,28 +500,41 @@ async function finalStage(ctx, artifact, timing) {
   const evidence = artifact.productionPlan.burnSubtitles && native ? await store.readData(record, native, ctx.rootDir) : null;
   const captions = buildDisplayCaptions(artifact, timing, subtitleStyle.fontSize, evidence);
   const subtitleBinding = { subtitleStyle, captionLayoutVersion: CAPTION_LAYOUT_VERSION, captionsSha256: sha256(captions) };
+  const openingImages = timing.opening ? timing.scenes.map(scene => ({ sceneId: scene.id, image: media.lineart[scene.id].image })) : [];
+  const openingIdentity = timing.opening ? { opening: { ...timing.opening, images: openingImages.map(({ sceneId, image }) => ({ sceneId, sha256: image.sha256 })) } } : {};
   const item = await ctx.attempt('final_delivery', '', false, sha256({ scenes: media.current.scene_render.identity,
-    narration: media.current.full_narration.identity, recipe: media.recipe, burnSubtitles: artifact.productionPlan.burnSubtitles, ...subtitleBinding, ...bgmBinding }));
+    narration: media.current.full_narration.identity, recipe: media.recipe, burnSubtitles: artifact.productionPlan.burnSubtitles, ...subtitleBinding, ...bgmBinding, ...openingIdentity }));
   const directory = store.workDirectory(ctx.workflowId, item.id, ctx.rootDir);
   const sceneFiles = [];
+  let openingReceipt;
+  if (timing.opening) {
+    await ctx.emitProgress?.({ type: 'stage_progress', stage: 'final_delivery', message: '正在制作提问开场，依次叠放全部成品图片...' });
+    const images = [];
+    for (const entry of openingImages) images.push(await ctx.filePath(record, entry.image));
+    const output = path.join(directory, 'opening.mp4');
+    openingReceipt = await ctx.tools.renderOpening({ images, output, question: timing.opening.question, endMs: timing.opening.endMs }, ctx.runtime, ctx.processOptions);
+    sceneFiles.push(output);
+  }
   for (const scene of timing.scenes) sceneFiles.push(await ctx.filePath(record, media.scenes[scene.id].video));
   const audioFile = media.current.full_narration.audio ? await ctx.filePath(record, media.current.full_narration.audio) : null;
-  const validation = await ctx.tools.finalVideo({ sceneFiles, audioFile, bgm, cues: captions, subtitleStyle,
+  const validation = await ctx.tools.finalVideo({ sceneFiles, audioFile, bgm, cues: timing.opening ? captions.filter(cue => cue.sourceCueId !== timing.opening.cueId) : captions, subtitleStyle,
     durationMs: timing.durationMs, directory, burnSubtitles: artifact.productionPlan.burnSubtitles }, ctx.runtime, ctx.processOptions);
   const subtitles = path.join(directory, 'final.srt');
   await fsp.writeFile(subtitles, srtText(captions), { flag: 'wx' });
   const poster = path.join(directory, 'poster.png');
   await ctx.tools.extractFrame(path.join(directory, 'final.mp4'), poster, Math.min(timing.durationMs - 100, captions[0].endMs - 50), ctx.runtime, ctx.processOptions);
-  const receipt = await ctx.jsonFile(item, 'technical-validation.json', { ...validation, recipe: media.recipe, ...subtitleBinding, ...bgmBinding,
+  const receipt = await ctx.jsonFile(item, 'technical-validation.json', { ...validation, recipe: media.recipe, ...subtitleBinding, ...bgmBinding, ...openingIdentity,
+    ...(openingReceipt ? { openingReceipt } : {}),
     narrationIdentity: media.current.full_narration.identity, sceneBundleIdentity: media.current.scene_render.identity });
   await ctx.publish(item, {
     video: { path: path.join(directory, 'final.mp4'), kind: 'final_video', name: '最终白板视频', mime: 'video/mp4' },
     poster: { path: poster, kind: 'final_poster', name: '成片预览', mime: 'image/png' },
     subtitles: { path: subtitles, kind: 'final_subtitles', name: '成片字幕', mime: 'application/x-subrip' },
     receipt: { path: receipt, kind: 'technical_validation', name: '技术验证记录', mime: 'application/json' },
+    ...(openingReceipt ? { openingVideo: { path: path.join(directory, 'opening.mp4'), kind: 'opening_video', name: '提问开场', mime: 'video/mp4' } } : {}),
   }, (current, published) => {
     current.whiteboard.media.current.final_delivery = store.bind({ kind: 'final_video', inputIdentity: item.inputIdentity,
-      ...published, validation, ...subtitleBinding, ...bgmBinding, narrationIdentity: media.current.full_narration.identity, sceneBundleIdentity: media.current.scene_render.identity });
+      ...published, validation, ...subtitleBinding, ...bgmBinding, ...openingIdentity, narrationIdentity: media.current.full_narration.identity, sceneBundleIdentity: media.current.scene_render.identity });
     current.result = { render: { output_url: `/api/creative-workflows/${ctx.workflowId}/whiteboard/media/${published.video.id}` } };
   });
   const updated = await ctx.read();

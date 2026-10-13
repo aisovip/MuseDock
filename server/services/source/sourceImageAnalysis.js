@@ -110,7 +110,7 @@ async function analyzeArticleAsset(asset, model, runtime = {}) {
       provider: runtime.provider,
       modelId: runtime.modelId,
       textConfig: runtime,
-      response_format: { type: 'json_object' },
+      outputFormat: { type: 'json' },
       messages: [{
         role: 'user',
         content: [

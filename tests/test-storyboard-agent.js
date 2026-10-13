@@ -230,6 +230,7 @@ async function run() {
   assert.equal(result.storyboard.scenes[0].end, 3.75);
   assert.equal(result.raw.scenes.length, 1);
   assert.match(calls[0].messages[0].content, /start/);
+  assert.deepStrictEqual(calls[0].outputFormat, { type: 'json' });
   assert.match(calls[0].messages[1].content, /AI_STORYBOARD_TARGET=hyperframes/);
   assert.match(calls[0].messages[1].content, /AI_STORYBOARD_COVER_ALL_CAPTIONS=true/);
   assert.match(calls[0].messages[1].content, /Frame Profile：creative_brutalist/);

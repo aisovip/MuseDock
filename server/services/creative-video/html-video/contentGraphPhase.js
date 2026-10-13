@@ -42,6 +42,7 @@ async function callTextModel(model, prompt, options = {}) {
   const response = await model.callTextModel({
     ...objectOrEmpty(options),
     messages: [{ role: 'user', content: prompt }],
+    outputFormat: { type: 'json' },
   });
   if (!response || response.success === false) {
     return {

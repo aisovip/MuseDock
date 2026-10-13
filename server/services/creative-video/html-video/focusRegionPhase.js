@@ -205,7 +205,7 @@ async function visionFocusRegions({ asset, image, model, cache }) {
           sub_stage: 'vision',
           asset_id: text(asset.id || asset.asset_id),
         },
-        response_format: { type: 'json_object' },
+        outputFormat: { type: 'json' },
         messages: [{
           role: 'user',
           content: [

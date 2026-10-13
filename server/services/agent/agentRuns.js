@@ -502,6 +502,7 @@ async function createDouyinAgentRun(awemeId, options = {}) {
   try {
     modelResult = await modelService.callTextModel({
       messages,
+      outputFormat: { type: 'json' },
       temperature: agentConfig.modelOptions.temperature,
       configPath: options.configPath,
       textConfig: options.textConfig,

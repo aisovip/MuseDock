@@ -1,4 +1,5 @@
 import { CANVAS_FORMATS, validateSubtitleSettings, subtitleStyle } from '../shared/productionForm.js';
+import { validateOpening } from '../shared/openingForm.js';
 export const WHITEBOARD_MODE = 'whiteboard-stream-v1';
 export const HYPERFRAMES_MODE = 'hyperframes-v1';
 export const WHITEBOARD_CANVAS_FORMATS = CANVAS_FORMATS;
@@ -19,7 +20,7 @@ export function createWhiteboardDraft() {
   return {
     inputMode: 'topic', contents: { topic: '', text: '', srt: '' }, rewritePolicy: 'preserve',
     targetDurationSeconds: 60, narrationLanguage: 'zh-CN', visualStylePreset: 'warm-paper-minimal-v1',
-    aspectRatio: '16:9',
+    aspectRatio: '16:9', opening: { mode: 'disabled', question: '' },
     productionPlan: { bgmMode: 'disabled', handDisplayMode: 'show', agentApprovalEnabled: false, imageGenerationMode: 'per_scene',
       burnSubtitles: true, narrationMode: 'enabled', subtitleColor: '#FFFFFF', subtitleFontSize: null },
   };
@@ -32,6 +33,8 @@ export function validateWhiteboardDraft(draft) {
   if (text.length > 50000) return '创作内容不能超过 50000 个字符。';
   const subtitleError = validateSubtitleSettings(draft.productionPlan);
   if (subtitleError) return subtitleError;
+  const openingError = validateOpening(draft.opening);
+  if (openingError) return openingError;
   if (draft.inputMode !== 'srt') {
     const seconds = Number(draft.targetDurationSeconds);
     if (!Number.isInteger(seconds) || seconds < 15 || seconds > 600) return '目标时长需为 15–600 秒的整数。';
@@ -58,6 +61,7 @@ export function buildWhiteboardPayload(draft) {
       inputMode: draft.inputMode, content: draft.contents[draft.inputMode].trim(),
       narrationLanguage: draft.narrationLanguage, visualStylePreset: draft.visualStylePreset,
       aspectRatio: draft.aspectRatio || '16:9',
+      ...(draft.opening?.mode === 'question' ? { opening: { mode: 'question', question: (draft.opening.question || '').trim() } } : {}),
       ...(draft.inputMode === 'srt' ? {} : {
         rewritePolicy: draft.inputMode === 'topic' ? 'generate' : draft.rewritePolicy,
         targetDurationSeconds: Number(draft.targetDurationSeconds),

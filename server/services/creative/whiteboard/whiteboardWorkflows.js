@@ -256,7 +256,12 @@ async function actOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) {
     }
     const productionPlan = payload.action === 'update_plan'
       ? normalizeProductionPlan({ ...latest.productionPlan, ...(payload.productionPlan || {}) }) : latest.productionPlan;
-    if (payload.action === 'update_plan') await artifactStore.readArtifact(record, current, options.rootDir);
+    if (payload.action === 'update_plan') {
+      const previous = await artifactStore.readArtifact(record, current, options.rootDir);
+      if (input.opening && !input.opening.question && !previous.opening) {
+        throw new WhiteboardError('INVALID_OPENING', '请填写开场问题后保存；自动拟定问题请在创建任务时选择提问模式。');
+      }
+    }
     if (payload.action === 'update_plan') record.whiteboard.narrationService = (await production.voiceSnapshot(options.services)).service;
     const kind = payload.action === 'update_plan' ? 'settings' : (payload.action === 'retry' || payload.action === 'authorize_new_attempt' ? latest.kind : 'model');
     const retryOfAttemptId = payload.action === 'retry' && kind === 'model' ? latest.id : '';
@@ -287,6 +292,7 @@ async function buildDialogContext(record, options) {
     stageLabel: media ? mediaStore.stageLabel(media, media.stage) : '',
     gateTitle: mediaStore.gateTitle(media),
     progressMessage: record.message || '',
+    opening: artifact?.opening || null,
     lastError: record.error?.message || '',
     scenes: (artifact?.scenes || []).map((scene, index) => ({
       index: index + 1, id: scene.id, title: scene.title,
@@ -399,6 +405,7 @@ async function runWhiteboardWorkflow(workflowId, options = {}) {
     await options.taskContext?.emit?.({ type: 'stage_started', stage: 'content_plan', progress: 20, message: '正在整理白板内容、分镜和制作方案...' });
     const candidate = attempt.kind === 'settings' ? {
       schemaVersion: 1, title: previousArtifact.title, summary: previousArtifact.summary,
+      ...(attempt.input.opening ? { openingQuestion: attempt.input.opening.question || previousArtifact.opening?.question } : {}),
       cues: previousArtifact.cues.map(({ id, text }) => ({ id, text })),
       scenes: previousArtifact.scenes.map(({ id, title, cueIds, imagePrompt, imageTexts }) => ({ id, title, cueIds, imagePrompt,
         ...(imageTexts ? { imageTexts } : {}) })),
@@ -441,7 +448,7 @@ async function runWhiteboardWorkflow(workflowId, options = {}) {
       record.updated_at = now;
       setStage(record, 'content_plan', 'done', '当前方案已通过结构与输入校验。', now);
       setStage(record, 'initial_approval', 'waiting_approval', '等待你确认当前内容与制作方案。', now);
-      addMessage(record, 'assistant', `第 ${active.number} 版内容与制作方案已整理完成。${artifact.summary}\n请检查方案中的正文、分镜与制作设置；你可以提出修改意见，或确认当前方案。`, now, attempt.id);
+      addMessage(record, 'assistant', `第 ${active.number} 版内容与制作方案已整理完成。${artifact.summary}\n请检查方案中的${artifact.opening ? '开场问题、' : ''}正文、分镜与制作设置；你可以提出修改意见，或确认当前方案。`, now, attempt.id);
       const interaction = { id: crypto.randomUUID(), kind: 'plan_review', stage: 'initial_approval', status: 'pending',
         title: `请确认第 ${active.number} 版内容与制作方案`, expectedAttemptId: attempt.id, expectedIdentity: binding.identity,
         createdAt: now, summary: artifact.summary };

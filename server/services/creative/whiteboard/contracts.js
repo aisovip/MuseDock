@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const sharedProduction = require('../shared/productionSettings');
+const { normalizeOpening, validateQuestion, freezeOpening, MAX_QUESTION_LENGTH } = require('../shared/videoOpening');
 const CANVAS_FORMATS = require('../../../resources/whiteboard/canvas-formats.json');
 const HANDWRITTEN_PRESET_ID = 'whiteboard-handwritten-explainer-v1';
 const handwrittenPreset = require('../../../resources/whiteboard/visual-presets.json').presets.find(item => item.id === HANDWRITTEN_PRESET_ID);
@@ -97,7 +98,7 @@ function normalizeProductionPlan(value = {}) {
 
 function normalizeInput(value) {
   assertObject(value, '白板输入');
-  rejectExtraKeys(value, ['inputMode', 'content', 'rewritePolicy', 'targetDurationSeconds', 'narrationLanguage', 'visualStylePreset', 'aspectRatio'], '白板输入');
+  rejectExtraKeys(value, ['inputMode', 'content', 'rewritePolicy', 'targetDurationSeconds', 'narrationLanguage', 'visualStylePreset', 'aspectRatio', 'opening'], '白板输入');
   const inputMode = value.inputMode;
   if (!['topic', 'text', 'srt'].includes(inputMode)) throw new WhiteboardError('INVALID_INPUT', '请选择主题、正文或 SRT 字幕。');
   if (typeof value.content !== 'string' || !value.content.trim() || value.content.length > 50000) throw new WhiteboardError('INVALID_INPUT', '请输入创作内容，长度不能超过 50000 个字符。');
@@ -109,6 +110,10 @@ function normalizeInput(value) {
   const aspectRatio = value.aspectRatio ?? '16:9';
   canvasFor(aspectRatio);
   const normalized = { inputMode, content, narrationLanguage, visualStylePreset, aspectRatio };
+  try {
+    const opening = normalizeOpening(value.opening);
+    if (opening) normalized.opening = opening;
+  } catch (error) { throw new WhiteboardError(error.code, error.message); }
   if (inputMode === 'srt') {
     if (value.rewritePolicy != null || value.targetDurationSeconds != null) throw new WhiteboardError('INVALID_INPUT', 'SRT 使用原有字幕和时间轴，不接受改写策略或目标时长。');
     parseSrt(content);
@@ -150,13 +155,19 @@ const CANDIDATE_SCHEMA = {
 };
 
 function candidateContractFor(input) {
-  if (input.visualStylePreset !== HANDWRITTEN_PRESET_ID) return { skeleton: CANDIDATE_SKELETON, schema: CANDIDATE_SCHEMA };
   const skeleton = structuredClone(CANDIDATE_SKELETON);
-  skeleton.scenes[0].imageTexts = ['画面中需要逐字呈现的短句'];
   const schema = structuredClone(CANDIDATE_SCHEMA);
-  const scene = schema.properties.scenes.items;
-  scene.required.push('imageTexts');
-  scene.properties.imageTexts = { type: 'array', maxItems: 24, items: { type: 'string', minLength: 1, maxLength: 80 } };
+  if (input.visualStylePreset === HANDWRITTEN_PRESET_ID) {
+    skeleton.scenes[0].imageTexts = ['画面中需要逐字呈现的短句'];
+    const scene = schema.properties.scenes.items;
+    scene.required.push('imageTexts');
+    scene.properties.imageTexts = { type: 'array', maxItems: 24, items: { type: 'string', minLength: 1, maxLength: 80 } };
+  }
+  if (input.opening?.mode === 'question') {
+    skeleton.openingQuestion = input.opening.question || '根据正文提出的一个简短、自然的问题';
+    schema.required.push('openingQuestion');
+    schema.properties.openingQuestion = { type: 'string', minLength: 1, maxLength: MAX_QUESTION_LENGTH };
+  }
   return { skeleton, schema };
 }
 
@@ -181,7 +192,13 @@ function validateCandidate(candidate, input) {
     const extras = Object.keys(value).filter(key => !allowed.includes(key));
     if (extras.length) errors.push(`${label}包含合同外字段：${extras.map(key => fieldPath ? `${fieldPath}.${key}` : key).join('、')}。只允许字段：${allowed.join('、')}。`);
   };
-  keys(candidate, Object.keys(CANDIDATE_SKELETON), '候选');
+  keys(candidate, Object.keys(candidateContractFor(input).skeleton), '候选');
+  if (input.opening?.mode === 'question') {
+    try {
+      const question = validateQuestion(candidate.openingQuestion);
+      if (input.opening.question && question !== input.opening.question) errors.push('openingQuestion 必须逐字保留指定的开场问题。');
+    } catch (error) { errors.push(`openingQuestion：${error.message}`); }
+  }
   if (candidate.schemaVersion !== 1) errors.push('schemaVersion 必须为 1。');
   for (const key of ['title', 'summary']) {
     const maxLength = key === 'title' ? 120 : 2000;
@@ -246,11 +263,13 @@ function materializeCandidate(candidate, input, productionPlan, narrationService
     return { ...cue, startMs, endMs: index + 1 + Math.round(weightedDurationMs * weight / totalWeight) };
   });
   const byId = new Map(cues.map(cue => [cue.id, cue]));
+  const opening = input.opening?.mode === 'question' ? freezeOpening(candidate.openingQuestion, input.narrationLanguage) : null;
   return {
     schemaVersion: 1, contractVersion: CONTRACT_VERSION,
     aspectRatio: input.aspectRatio || '16:9', canvas: canvasFor(input.aspectRatio),
     title: candidate.title.trim(), summary: candidate.summary.trim(),
-    narrationText: cues.map(cue => cue.text).join('\n'), narrationLanguage: input.narrationLanguage,
+    narrationText: [...(opening ? [opening.question] : []), ...cues.map(cue => cue.text)].join('\n'), narrationLanguage: input.narrationLanguage,
+    ...(opening ? { opening } : {}),
     sourceTextSha256: sha256(input.content), timingKind: sourceCues ? 'source_srt' : 'provisional', durationMs,
     visualStyle: { rendererCompatibility: 'warm-paper-stream-v1', ...structuredClone(VISUAL_PRESETS.find(preset => preset.id === input.visualStylePreset)) },
     productionPlan: normalizeProductionPlan(productionPlan),

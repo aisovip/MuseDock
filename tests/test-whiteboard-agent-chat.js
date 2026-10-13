@@ -41,7 +41,7 @@ async function testClassifyIntent() {
     } } },
   });
   assert.equal(request.temperature, 0);
-  assert.deepEqual(request.response_format, { type: 'json_object' });
+  assert.deepEqual(request.outputFormat, { type: 'json' });
   assert.ok(request.messages[1].content.includes('1、2、6生成的图片为什么有手机边框？重新生成'));
   assert.ok(request.messages[1].content.includes('scene_6'));
   assert.deepEqual(intent.sceneIds, ['scene_1', 'scene_2', 'scene_6']);

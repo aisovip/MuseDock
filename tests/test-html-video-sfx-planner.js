@@ -51,6 +51,7 @@ assert.equal(bad.code, 'sfx_ai_parse_failed');
     model: {
       callTextModel: async request => {
         auditSeen = request.audit;
+        assert.deepEqual(request.outputFormat, { type: 'json' });
         return { success: true, text: '{"sfx_events":[]}' };
       },
     },

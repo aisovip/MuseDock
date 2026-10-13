@@ -76,6 +76,7 @@ async function proofreadTranscript(sentences, {
     const result = await callModel({
       configPath, textConfig, temperature: 0.1, maxRetries: 0, requestTimeoutMs: 180000,
       maxOutputTokens: 8000, maxTokens: 8000,
+      outputFormat: { type: 'json' },
       messages: [
         { role: 'system', content: CORRECTION_INSTRUCTIONS },
         { role: 'user', content: JSON.stringify({ title,

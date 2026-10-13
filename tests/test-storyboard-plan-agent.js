@@ -95,6 +95,7 @@ const storyboardPlanAgent = require('../server/services/storyboard/storyboardPla
   });
 
   assert.equal(capturedPayload.stream, true);
+  assert.deepEqual(capturedPayload.outputFormat, { type: 'json' });
   assert.equal(capturedPayload.maxRetries, 3);
   assert.equal(planned.success, true);
   assert.equal(planned.storyboard_plan.status, 'planned');

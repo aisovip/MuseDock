@@ -18,6 +18,7 @@ async function checkFailure(fetchResult, category, code = 'UNKNOWN_EXTERNAL_OUTC
       calls += 1;
       const body = JSON.parse(init.body);
       assert.equal(body.max_output_tokens, 10000, '诊断不能更改模型输出预算');
+      assert.deepEqual(body.text.format, { type: 'json_object' });
       return fetchResult();
     } },
   }), error => { failure = error; return error.code === code; });
@@ -84,5 +85,47 @@ async function checkFailure(fetchResult, category, code = 'UNKNOWN_EXTERNAL_OUTC
   assert.deepEqual(result, { ok: true });
   assert.deepEqual(requests, [0, 1], '已完成响应的格式补正仍共享原有一次预算');
   assert.equal(calls, 2);
+  await structuredVision({ textConfig: { ...textConfig, protocol: 'openai-chat-completions' },
+    prompt: '返回测试候选', reasoningEffort: 'medium', validate: () => [],
+    services: { fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      assert.equal(body.reasoning_effort, 'medium', '其他模型保留调用方要求的思考强度');
+      assert.equal(body.max_completion_tokens, 10000, '其他模型保留原预算与 Chat 协议字段');
+      assert.equal(body.max_tokens, undefined);
+      assert.deepEqual(body.response_format, { type: 'json_object' });
+      return jsonResponse({ choices: [{ message: { content: completeText }, finish_reason: 'stop' }] });
+    } },
+  });
+  for (const protocol of ['openai-chat-completions', 'openai-responses']) {
+    for (const truncated of [false, true]) {
+      let flashCalls = 0;
+      const request = structuredVision({ textConfig: { ...textConfig, modelId: 'deepseek-flash', protocol },
+        prompt: '返回测试候选', reasoningEffort: 'medium', validate: candidate => candidate.ok === true ? [] : ['缺少 ok'],
+        services: { fetchImpl: async (_url, init) => {
+          flashCalls += 1;
+          const body = JSON.parse(init.body);
+          if (protocol === 'openai-chat-completions') {
+            assert.equal(body.reasoning_effort, 'low', 'Flash 不应沿用默认 high 或将 medium 映射为 high');
+            assert.equal(body.max_tokens, 32768, 'Flash 的思考与正文共用输出预算');
+            assert.equal(body.max_completion_tokens, undefined, 'DeepSeek Chat 使用官方 max_tokens 字段');
+            assert.deepEqual(body.response_format, { type: 'json_object' });
+            return jsonResponse({ choices: [{ message: { content: truncated ? '' : completeText,
+              reasoning_content: '模拟已消耗的思考文本' }, finish_reason: truncated ? 'length' : 'stop' }],
+              usage: { completion_tokens: truncated ? 32768 : 3000,
+                completion_tokens_details: { reasoning_tokens: truncated ? 32768 : 2000 } } });
+          }
+          assert.deepEqual(body.reasoning, { effort: 'low' });
+          assert.equal(body.max_output_tokens, 32768);
+          assert.deepEqual(body.text.format, { type: 'json_object' });
+          return jsonResponse({ status: truncated ? 'incomplete' : 'completed', output_text: truncated ? '' : completeText,
+            ...(truncated ? { incomplete_details: { reason: 'max_output_tokens' } } : {}) });
+        } },
+      });
+      if (truncated) await assert.rejects(request, error => error.code === 'UNKNOWN_EXTERNAL_OUTCOME'
+        && error.diagnostics.category === 'output_limit');
+      else assert.deepEqual(await request, { ok: true });
+      assert.equal(flashCalls, 1, 'Flash 达到新预算上限后仍必须暂停，不能自动重发');
+    }
+  }
   console.log('PASS 白板视觉诊断：真实适配器替身、HTTP 分类、截断/空响应/拒绝/网络/超时、单请求保护、脱敏和格式补正');
 })().catch(error => { console.error(error); process.exitCode = 1; });
