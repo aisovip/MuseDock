@@ -62,6 +62,7 @@ function createTranscriptionService(options = {}) {
   const running = new Map();
   const loading = new Map();
   const deleting = new Set();
+  const editing = new Set();
   const deleted = new Set();
   let creating = false;
 
@@ -78,7 +79,7 @@ function createTranscriptionService(options = {}) {
 
   async function save(job) {
     assertAvailable(job.id);
-    job.updatedAt = new Date().toISOString();
+    job.updatedAt = new Date(Math.max(Date.now(), (Date.parse(job.updatedAt) || 0) + 1)).toISOString();
     const file = path.join(directory(job.id), 'task.json');
     await fsp.writeFile(`${file}.tmp`, JSON.stringify(job, null, 2), 'utf8');
     await fsp.rename(`${file}.tmp`, file);
@@ -198,16 +199,16 @@ function createTranscriptionService(options = {}) {
 
   async function remove(id) {
     directory(id);
-    if (creating || running.has(id) || deleting.has(id)) {
-      throw new TranscriptionError('TASK_BUSY', '转写或校订正在进行，请等待完成后再删除。', 409);
+    if (creating || running.has(id) || deleting.has(id) || editing.has(id)) {
+      throw new TranscriptionError('TASK_BUSY', '转写、校订或保存修改正在进行，请等待完成后再删除。', 409);
     }
     if (deleted.has(id) || !await deletionDirectory(id)) {
       jobs.delete(id); deleted.add(id);
       return { id, deleted: true };
     }
     const job = await load(id);
-    if (creating || running.has(id) || deleting.has(id) || ACTIVE_STATUSES.has(job.status)) {
-      throw new TranscriptionError('TASK_BUSY', '转写或校订正在进行，请等待完成后再删除。', 409);
+    if (creating || running.has(id) || deleting.has(id) || editing.has(id) || ACTIVE_STATUSES.has(job.status)) {
+      throw new TranscriptionError('TASK_BUSY', '转写、校订或保存修改正在进行，请等待完成后再删除。', 409);
     }
     deleting.add(id);
     try {
@@ -310,6 +311,90 @@ function createTranscriptionService(options = {}) {
     job.correctionCount = corrected.changes.length;
     job.result.correctedText = text;
     job.result.correctedSentences = corrected.sentences;
+    job.result.rawModifiedAfterCorrection = false;
+  }
+
+  async function updateText(id, payload = {}) {
+    const job = await load(id);
+    assertAvailable(id);
+    if (creating || running.has(id) || editing.has(id) || ACTIVE_STATUSES.has(job.status) || job.stage === 'deleting') {
+      throw new TranscriptionError('TASK_BUSY', '转写、校订或保存修改正在进行，请稍后再保存。', 409);
+    }
+    if (!payload || !['raw', 'corrected'].includes(payload.version)
+      || Object.keys(payload).some(key => !['version', 'texts', 'updatedAt'].includes(key))) {
+      throw new TranscriptionError('INVALID_EDIT', '请选择原始转写或校订版，并提交有效的字幕文字。');
+    }
+    if (typeof payload.updatedAt !== 'string' || payload.updatedAt !== job.updatedAt) {
+      throw new TranscriptionError('EDIT_CONFLICT', '这条转写已更新，请重新加载后再修改；当前修改尚未保存。', 409);
+    }
+    const raw = payload.version === 'raw';
+    const sentenceKey = raw ? 'sentences' : 'correctedSentences';
+    const textKey = raw ? 'rawText' : 'correctedText';
+    const srtKey = raw ? 'rawSrt' : 'correctedSrt';
+    const previousSentences = job.result?.[sentenceKey];
+    if (!previousSentences?.length || !job.files?.[textKey] || !job.files?.[srtKey]) {
+      throw new TranscriptionError('TEXT_NOT_EDITABLE', '该版本尚未生成可修改的文字和字幕。', 409);
+    }
+    if (!Array.isArray(payload.texts) || payload.texts.length !== previousSentences.length
+      || payload.texts.some(text => typeof text !== 'string' || !text.trim() || /[\r\n\u0000]/.test(text) || text.length > 10000)
+      || payload.texts.reduce((length, text) => length + text.length, 0) > 500000) {
+      throw new TranscriptionError('INVALID_EDIT', `请保留 ${previousSentences.length} 行字幕，每行不能为空，且不能增删字幕行。`);
+    }
+    editing.add(id);
+    try {
+      await verifiedFile(job, textKey);
+      await verifiedFile(job, srtKey);
+      const texts = payload.texts.map(text => text.trim());
+      if (texts.every((text, index) => text === previousSentences[index].text)) return present(job);
+      // 在独立版本目录准备完整产物；task.json 原子替换成功后才发布到内存。
+      const next = structuredClone(job);
+      const editedAt = new Date().toISOString();
+      const editDir = `edits/${randomUUID()}`;
+      const changes = [];
+      const sentences = previousSentences.map((cue, index) => {
+        if (cue.text === texts[index]) return { ...cue };
+        const { words, ...sentence } = cue;
+        changes.push({ index: cue.index, before: cue.text, after: texts[index], startMs: cue.startMs, endMs: cue.endMs });
+        return { ...sentence, text: texts[index] };
+      });
+      const text = texts.join('\n');
+      next.result[textKey] = text;
+      next.result[sentenceKey] = sentences;
+      next.result[raw ? 'rawEditedAt' : 'correctedEditedAt'] = editedAt;
+      await writeArtifact(next, textKey, `${editDir}/transcript.${payload.version}.txt`, `${text}\n`);
+      await writeArtifact(next, srtKey, `${editDir}/transcript.${payload.version}.srt`, toSrt(sentences));
+      if (raw) {
+        const rawJson = await verifiedFile(job, 'rawJson');
+        const original = JSON.parse(await fsp.readFile(rawJson.path, 'utf8'));
+        // 人工改字没有重新听音对齐，原字词证据继续保留在上一版 JSON 中。
+        next.result.words = [];
+        next.result.rawModifiedAfterCorrection = !!next.result.correctedText;
+        await writeArtifact(next, 'rawJson', `${editDir}/transcript.raw.json`, JSON.stringify({
+          ...original, text, sentences, words: [], manuallyEdited: true, editedAt,
+          wordAlignmentValid: false, previousRawJson: job.files.rawJson,
+        }, null, 2));
+      } else {
+        next.correctionCount = sentences.filter((cue, index) => cue.text !== next.result.sentences[index].text).length;
+        await verifiedFile(job, 'corrections');
+        await writeArtifact(next, 'corrections', `${editDir}/transcript.corrections.json`, JSON.stringify({
+          method: 'manual-edit', editedAt, source: job.source, previousRecord: job.files.corrections,
+          rawTextSha256: job.files.rawText.sha256, rawSrtSha256: job.files.rawSrt.sha256,
+          correctedTextSha256: next.files.correctedText.sha256, correctedSrtSha256: next.files.correctedSrt.sha256,
+          rawModifiedAfterCorrection: next.result.rawModifiedAfterCorrection === true,
+          indicesAndTimingPreserved: true, changes,
+        }, null, 2));
+      }
+      await fsp.writeFile(path.join(directory(id), editDir, 'edit.json'), JSON.stringify({
+        method: 'manual-edit', version: payload.version, editedAt, indicesAndTimingPreserved: true,
+        previousFiles: job.files, changes,
+      }, null, 2), { encoding: 'utf8', flag: 'wx' });
+      await save(next);
+      jobs.set(id, next);
+      return present(next);
+    } catch (error) {
+      if (error instanceof TranscriptionError) throw error;
+      throw new TranscriptionError('SAVE_FAILED', '修改未保存，请检查磁盘空间与目录权限后重试；已保存版本仍保留。', 500);
+    } finally { editing.delete(id); }
   }
 
   async function finish(job) {
@@ -449,6 +534,7 @@ function createTranscriptionService(options = {}) {
   return {
     list,
     remove,
+    updateText,
     async capabilities() {
       const asr = await (options.resolveAsrRuntime || mediaPipeline.resolveAsrRuntime)(options);
       const text = await (options.getTextConfig || aiModelConfig.getRuntimeConfig)('text', options);
@@ -487,7 +573,7 @@ function createTranscriptionService(options = {}) {
     async file(id, kind) { return verifiedFile(await load(id), kind); },
     async retryCorrection(id) {
       const job = await load(id);
-      if (creating || running.size || deleting.has(id) || deleted.has(id) || job.status !== 'partial' || job.stage !== 'correcting') {
+      if (creating || running.size || editing.has(id) || deleting.has(id) || deleted.has(id) || job.status !== 'partial' || job.stage !== 'correcting') {
         throw new TranscriptionError('CORRECTION_NOT_RETRYABLE', '该任务当前不能重试校订，请等待运行结束。', 409);
       }
       creating = true;

@@ -193,6 +193,12 @@ export const api = {
   getTranscription(id) {
     return requestJson(`/api/transcriptions/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(15000) });
   },
+  updateTranscriptionText(id, payload) {
+    return requestJson(`/api/transcriptions/${encodeURIComponent(id)}/text`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
+  },
   deleteTranscription(id) {
     return requestJson(`/api/transcriptions/${encodeURIComponent(id)}`, {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: true }),

@@ -48,6 +48,10 @@ function createTranscriptionRouter({ service = createTranscriptionService(), dou
     } });
   }));
   router.get('/:id', route(async (req, res) => res.json({ success: true, data: await service.get(req.params.id) })));
+  router.put('/:id/text', route(async (req, res) => {
+    assertLocalClient(req, '请在运行 MuseDock 的电脑上保存转写修改。');
+    res.json({ success: true, data: await service.updateText(req.params.id, req.body) });
+  }));
   router.delete('/:id', route(async (req, res) => {
     assertLocalClient(req, '请在运行 MuseDock 的电脑上删除转写记录。');
     if (!req.is('application/json') || req.body?.confirmed !== true || Object.keys(req.body).some(key => key !== 'confirmed')) {

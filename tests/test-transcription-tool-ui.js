@@ -28,6 +28,8 @@ async function run() {
   const submissions = [];
   const openRequests = [];
   const deleteRequests = [];
+  const saveRequests = [];
+  let saveFailure = false;
   let deleteFailure = false;
   let fileOpenFailure = false;
   const detailDelays = new Map();
@@ -61,7 +63,11 @@ async function run() {
       job.updatedAt = new Date().toISOString();
       job.message = req.body.autoCorrect ? '转写和校订完成，共校订 1 条字幕。' : '转写完成，原始文本和字幕已保存。';
       job.result = { rawText: number === 1 ? '家向的月光。' : '窗钱的月光。', durationMs: 1600, sentenceCount: 1 };
-      if (req.body.autoCorrect) { job.result.correctedText = '窗前的月光。'; job.correctionCount = 1; }
+      job.result.sentences = [{ index: 1, startMs: 100, endMs: 800, text: job.result.rawText }];
+      if (req.body.autoCorrect) {
+        job.result.correctedText = '窗前的月光。'; job.correctionCount = 1;
+        job.result.correctedSentences = [{ ...job.result.sentences[0], text: job.result.correctedText }];
+      }
       for (const kind of ['rawText', 'rawSrt', ...(req.body.autoCorrect ? ['correctedText', 'correctedSrt', 'corrections'] : [])]) {
         job.files[kind] = { name: `${kind}.${kind.endsWith('Srt') ? 'srt' : 'txt'}`, url: `/api/transcriptions/${id}/files/${kind}` };
       }
@@ -97,6 +103,23 @@ async function run() {
     const snapshot = JSON.parse(JSON.stringify(job));
     const delays = detailDelays.get(req.params.id);
     setTimeout(() => res.json({ success: true, data: snapshot }), (Array.isArray(delays) ? delays.shift() : delays) || 0);
+  });
+  app.put('/api/transcriptions/:id/text', (req, res) => {
+    saveRequests.push({ id: req.params.id, ...req.body });
+    setTimeout(() => {
+      if (saveFailure) return res.status(500).json({ message: '测试：磁盘空间不足，修改未保存。' });
+      const job = jobs.get(req.params.id);
+      if (job.updatedAt !== req.body.updatedAt) return res.status(409).json({ message: '这条转写已更新，请重新加载。' });
+      const raw = req.body.version === 'raw';
+      const sentenceKey = raw ? 'sentences' : 'correctedSentences';
+      const textKey = raw ? 'rawText' : 'correctedText';
+      job.result[sentenceKey] = job.result[sentenceKey].map((cue, index) => ({ ...cue, text: req.body.texts[index] }));
+      job.result[textKey] = req.body.texts.join('\n');
+      job.result[raw ? 'rawEditedAt' : 'correctedEditedAt'] = new Date().toISOString();
+      if (raw) job.result.rawModifiedAfterCorrection = !!job.result.correctedText;
+      job.updatedAt = new Date().toISOString();
+      res.json({ success: true, data: job });
+    }, 350);
   });
   app.delete('/api/transcriptions/:id', (req, res) => {
     if (req.body?.confirmed !== true) return res.status(400).json({ success: false, message: '请先确认删除。' });
@@ -426,6 +449,72 @@ async function run() {
     assert.equal(await dialog.getByRole('tabpanel').innerText(), '窗前的月光。');
     await page.screenshot({ path: path.join(os.tmpdir(), 'musedock-transcription-after-delete.png'), fullPage: true });
 
+    // 两版均可独立修改；保存失败、未保存退出和刷新恢复不能丢失已保存版本。
+    await page.setViewportSize({ width: 1360, height: 960 });
+    await dialog.getByRole('tab', { name: '原始转写' }).click();
+    await dialog.getByRole('button', { name: '修改文本', exact: true }).click();
+    const rawEditor = page.getByRole('dialog', { name: '修改原始转写', exact: true });
+    const rawInput = rawEditor.getByRole('textbox', { name: '修改转写文本', exact: true });
+    assert.equal(await rawInput.inputValue(), '窗钱的月光。');
+    assert.equal(await rawEditor.getByRole('button', { name: '保存修改', exact: true }).isDisabled(), true);
+    await rawInput.fill('不允许增行\n第二行');
+    await rawEditor.getByRole('button', { name: '保存修改', exact: true }).click();
+    await rawEditor.getByRole('alert').filter({ hasText: '请保留 1 行字幕' }).waitFor();
+    assert.equal(saveRequests.length, 0);
+    const editedRaw = '窗前的月光，照着小路。';
+    await rawInput.fill(editedRaw);
+    saveFailure = true;
+    await rawEditor.getByRole('button', { name: '保存修改', exact: true }).click();
+    await rawEditor.getByRole('status').filter({ hasText: '正在保存文本和字幕' }).waitFor();
+    assert.equal(await rawEditor.getByRole('button', { name: '正在保存...', exact: true }).isDisabled(), true);
+    assert.equal(await rawEditor.getByRole('button', { name: '取消', exact: true }).isDisabled(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await rawEditor.isVisible(), true, '保存期间 Escape 不关闭编辑弹窗');
+    await rawEditor.getByRole('alert').filter({ hasText: '测试：磁盘空间不足' }).waitFor();
+    assert.equal(await rawInput.inputValue(), editedRaw, '保存失败保留修改');
+    assert.equal(jobs.get('fixture-2').result.rawText, '窗钱的月光。');
+    await rawEditor.getByRole('button', { name: '取消', exact: true }).click();
+    const discard = page.getByRole('dialog', { name: '放弃未保存的修改？', exact: true });
+    await discard.getByRole('button', { name: '继续修改', exact: true }).click();
+    await discard.waitFor({ state: 'hidden' });
+    assert.equal(await rawInput.inputValue(), editedRaw);
+    saveFailure = false;
+    await rawEditor.getByRole('button', { name: '保存修改', exact: true }).click();
+    await rawEditor.waitFor({ state: 'hidden' });
+    await dialog.getByText('原始转写修改已保存，TXT 和 SRT 已同步更新。', { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('tab', { name: '原始转写' }).getAttribute('aria-selected'), 'true');
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), editedRaw);
+    assert.equal(jobs.get('fixture-2').result.correctedText, '窗前的月光。');
+    await dialog.getByText('原始转写已修改，校订版未自动同步，请核对校订版内容。', { exact: true }).waitFor();
+    await openResultFile('打开 TXT', 'fixture-2', 'rawText');
+    assert.equal(await fetch(`${appUrl}/api/transcriptions/fixture-2/files/rawText`).then(response => response.text()), editedRaw);
+
+    await dialog.getByRole('tab', { name: '校订版' }).click();
+    await dialog.getByRole('button', { name: '修改文本', exact: true }).click();
+    const correctedEditor = page.getByRole('dialog', { name: '修改校订版', exact: true });
+    await correctedEditor.getByRole('textbox', { name: '修改转写文本' }).fill('不保存的校订');
+    await page.keyboard.press('Escape');
+    await discard.getByRole('button', { name: '放弃修改', exact: true }).click();
+    await correctedEditor.waitFor({ state: 'hidden' });
+    assert.equal(jobs.get('fixture-2').result.correctedText, '窗前的月光。');
+    assert.equal(saveRequests.length, 2, '放弃修改不发起保存');
+    await dialog.getByRole('button', { name: '修改文本', exact: true }).click();
+    const editedCorrected = '窗前的月光，洒在小路上。';
+    await correctedEditor.getByRole('textbox', { name: '修改转写文本' }).fill(editedCorrected);
+    await correctedEditor.getByRole('button', { name: '保存修改', exact: true }).click();
+    await correctedEditor.waitFor({ state: 'hidden' });
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), editedCorrected);
+    assert.equal(jobs.get('fixture-2').result.rawText, editedRaw);
+    await openResultFile('打开 SRT', 'fixture-2', 'correctedSrt');
+    assert.match(await fetch(`${appUrl}/api/transcriptions/fixture-2/files/correctedSrt`).then(response => response.text()), /00:00:00,100 --> 00:00:00,800\n窗前的月光，洒在小路上。/);
+    await page.reload();
+    await page.getByRole('button', { name: '打开抖音转写工具' }).click();
+    await dialog.getByRole('tabpanel').getByText(editedCorrected, { exact: true }).waitFor();
+    await dialog.getByRole('tab', { name: '原始转写' }).click();
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), editedRaw);
+    assert.deepEqual(saveRequests.map(request => request.version), ['raw', 'raw', 'corrected']);
+    assert.equal(submissions.length, 2, '编辑和刷新不重新转写');
+
     await deleteButton('fixture-2').click();
     await confirmation.getByRole('button', { name: '确认删除', exact: true }).click();
     await confirmation.waitFor({ state: 'hidden' });
@@ -440,7 +529,7 @@ async function run() {
     assert.equal(submissions.length, 2, '删除和刷新不能重新提交转写');
     assert.deepEqual(errors, [], '页面不应发生 JavaScript 异常');
     assert.deepEqual(browserDownloads, [], '打开本地文件不能产生浏览器下载副本');
-    console.log('浏览器烟测通过：抽帧开关与数量校验、从 0 秒截图预览与本地打开、历史恢复、删除与迟到响应保护、窄屏布局。');
+    console.log('浏览器烟测通过：两版独立编辑与保存、失败重试与退出保护、历史恢复、抽帧、本地打开、删除与迟到响应保护、窄屏布局。');
     console.log(`截图：${path.join(os.tmpdir(), 'musedock-transcription-desktop.png')}`);
     console.log(`截图：${path.join(os.tmpdir(), 'musedock-transcription-mobile.png')}`);
   } finally {

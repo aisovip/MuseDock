@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AudioLines, Check, Copy, FileText, FolderOpen, ExternalLink, LoaderCircle, RotateCw } from 'lucide-react';
+import { AudioLines, Check, Copy, FileText, FolderOpen, ExternalLink, LoaderCircle, Pencil, RotateCw } from 'lucide-react';
 import { api } from '@/api/client.js';
 import { Button } from '@/components/ui/button.jsx';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog.jsx';
@@ -24,6 +24,11 @@ export function TranscriptionTool({ compact = false }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [version, setVersion] = useState('raw');
+  const [editor, setEditor] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [discardEdit, setDiscardEdit] = useState(false);
+  const savingRef = useRef(false);
   const fileActions = useLocalFileActions();
   const [notice, setNotice] = useState('');
   const [login, setLogin] = useState(null);
@@ -43,7 +48,7 @@ export function TranscriptionTool({ compact = false }) {
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const busy = submitting || !!activeJob || !!deletingId;
-  const navigationDisabled = submitting || fileActions.opening || !!loginAction || !!deletingId;
+  const navigationDisabled = submitting || fileActions.opening || !!loginAction || !!deletingId || !!editor;
   const validFrameCount = Number.isInteger(Number(frameCount)) && Number(frameCount) >= 1 && Number(frameCount) <= 100;
 
   useEffect(() => {
@@ -61,7 +66,7 @@ export function TranscriptionTool({ compact = false }) {
   useEffect(() => {
     setVersion(job?.result?.correctedText ? 'corrected' : 'raw');
     fileActions.clearMessage();
-  }, [job?.id, job?.result?.correctedText]);
+  }, [job?.id, !!job?.result?.correctedText]);
 
   function openHistory(id) {
     if (submittingRef.current || navigationDisabled) return;
@@ -148,12 +153,49 @@ export function TranscriptionTool({ compact = false }) {
     } catch { if (selectedIdRef.current === copiedId) setError('浏览器不允许自动复制，请选中文本复制或打开 TXT。'); }
   }
 
+  function editText() {
+    if (!job || isRunning(job) || navigationDisabled) return;
+    const sentences = version === 'raw' ? job.result.sentences : job.result.correctedSentences;
+    if (!sentences?.length) return;
+    const text = sentences.map(cue => cue.text).join('\n');
+    setEditor({ id: job.id, version, updatedAt: job.updatedAt, count: sentences.length, text, original: text });
+    setSaveError(''); setNotice(''); fileActions.clearMessage();
+  }
+
+  function closeEditor() {
+    if (savingRef.current) return;
+    if (editor?.text !== editor?.original) { setDiscardEdit(true); return; }
+    setEditor(null); setSaveError('');
+  }
+
+  async function saveText() {
+    if (!editor || savingRef.current || editor.text === editor.original) return;
+    const texts = editor.text.replace(/\r\n?/g, '\n').split('\n');
+    if (texts.length !== editor.count || texts.some(text => !text.trim())) {
+      setSaveError(`请保留 ${editor.count} 行字幕，每行不能为空，且不能增删字幕行。`);
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true); setSaveError('');
+    try {
+      const response = await api.updateTranscriptionText(editor.id, {
+        version: editor.version, texts, updatedAt: editor.updatedAt,
+      });
+      rememberJob(response.data);
+      setVersion(editor.version);
+      setNotice(`${editor.version === 'raw' ? '原始转写' : '校订版'}修改已保存，TXT 和 SRT 已同步更新。`);
+      setEditor(null);
+    } catch (cause) {
+      setSaveError(cause.message || '修改未保存，请重试。');
+    } finally { savingRef.current = false; setSaving(false); }
+  }
+
   const textKind = version === 'corrected' ? 'correctedText' : 'rawText';
   const srtKind = version === 'corrected' ? 'correctedSrt' : 'rawSrt';
 
   return (
     <Dialog open={open} onOpenChange={value => {
-      if (deletingRef.current || deleteTarget) return;
+      if (deletingRef.current || deleteTarget || editor) return;
       setOpen(value);
       if (!value) { setDeleteTarget(null); setDeleteError(''); }
     }}>
@@ -166,7 +208,7 @@ export function TranscriptionTool({ compact = false }) {
         </Button>
       </DialogTrigger>
       <DialogContent ref={dialogContentRef}
-        onInteractOutside={event => { if (deleteTarget || deletingRef.current) event.preventDefault(); }}
+        onInteractOutside={event => { if (deleteTarget || deletingRef.current || editor) event.preventDefault(); }}
         className="flex h-[min(820px,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 transition-none sm:max-w-5xl">
         <DialogHeader className="shrink-0 border-b border-line-1 px-5 py-4 text-left">
           <DialogTitle className="flex items-center gap-2"><AudioLines className="size-5" />抖音转写</DialogTitle>
@@ -295,7 +337,11 @@ export function TranscriptionTool({ compact = false }) {
                 <TabsContent value="corrected"><pre className="m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-3 font-sans text-sm leading-7">{job.result.correctedText}</pre></TabsContent>
               </Tabs>
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={copyText} disabled={!job.result.rawText}><Copy />复制文本</Button>
+                <Button variant="outline" size="sm" onClick={editText}
+                  disabled={navigationDisabled || isRunning(job) || !(version === 'raw' ? job.result.sentences : job.result.correctedSentences)?.length}>
+                  <Pencil />修改文本
+                </Button>
+                <Button variant="outline" size="sm" onClick={copyText} disabled={!job.result[textKind]}><Copy />复制文本</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(textKind)} disabled={fileActions.opening || !job.files[textKind]}><FileText />打开 TXT</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(srtKind)} disabled={fileActions.opening || !job.files[srtKind]}><FileText />打开 SRT</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(srtKind, 'folder')} disabled={fileActions.opening || !job.files[srtKind]}><FolderOpen />打开所在文件夹</Button>
@@ -303,6 +349,8 @@ export function TranscriptionTool({ compact = false }) {
                 {job.files.corrections && <Button variant="ghost" size="sm" onClick={() => openFile('corrections')} disabled={fileActions.opening}>打开校订记录</Button>}
               </div>
               {!!job.result.words?.length && job.result.correctedText && <p className="m-0 text-xs text-muted-foreground">字词时间点属于原始转写；文本校订没有重新进行音频对齐。</p>}
+              {(job.result.rawEditedAt || job.result.correctedEditedAt) && <p className="m-0 text-xs text-muted-foreground">已保存人工修改，字幕时间轴保持不变；修改文字没有重新进行音频对齐。</p>}
+              {job.result.rawModifiedAfterCorrection && <p className="m-0 text-xs text-muted-foreground">原始转写已修改，校订版未自动同步，请核对校订版内容。</p>}
               {(fileActions.message || notice) && <p role={fileActions.error ? 'alert' : 'status'} className={`m-0 flex items-center gap-2 text-xs ${fileActions.error ? 'text-danger' : 'text-muted-foreground'}`}>
                 {fileActions.opening && <LoaderCircle className="size-3.5 animate-spin" />}{fileActions.message || notice}
               </p>}
@@ -336,6 +384,30 @@ export function TranscriptionTool({ compact = false }) {
             </div>
           </div>
         </div>
+      <Dialog open={Boolean(editor)} onOpenChange={value => { if (!value) closeEditor(); }}>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-3xl"
+          onEscapeKeyDown={event => { if (savingRef.current || discardEdit) event.preventDefault(); }}
+          onInteractOutside={event => event.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle>修改{editor?.version === 'raw' ? '原始转写' : '校订版'}</DialogTitle>
+            <DialogDescription>每行对应一条字幕，请保留行数。保存后同步更新本版本的 TXT 和 SRT，字幕时间轴保持不变。</DialogDescription>
+          </DialogHeader>
+          <Textarea aria-label="修改转写文本" className="min-h-48 flex-1 leading-7" rows={12}
+            value={editor?.text || ''} disabled={saving} onChange={event => setEditor(current => ({ ...current, text: event.target.value }))} />
+          <p className="m-0 text-xs text-muted-foreground">共 {editor?.count || 0} 条字幕。两版分别保存，修改不会自动同步到另一版。</p>
+          {saveError && <p role="alert" className="m-0 text-sm text-danger">{saveError}</p>}
+          {saving && <p role="status" className="m-0 flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />正在保存文本和字幕...</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={closeEditor} disabled={saving}>取消</Button>
+            <Button onClick={saveText} disabled={saving || editor?.text === editor?.original}>
+              {saving && <LoaderCircle className="size-4 animate-spin" />}{saving ? '正在保存...' : '保存修改'}
+            </Button>
+          </div>
+          <ConfirmDialog open={discardEdit} onOpenChange={setDiscardEdit} title="放弃未保存的修改？"
+            description="当前修改尚未保存，放弃后将继续使用已保存的文本。" cancelText="继续修改" confirmText="放弃修改"
+            onConfirm={() => { setDiscardEdit(false); setEditor(null); setSaveError(''); }} />
+        </DialogContent>
+      </Dialog>
       <ConfirmDialog open={Boolean(deleteTarget)} onOpenChange={value => {
         if (!value && !deletingRef.current) { setDeleteTarget(null); setDeleteError(''); }
       }} title="删除这条转写？"
