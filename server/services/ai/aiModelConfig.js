@@ -19,6 +19,8 @@ const DEFAULT_MODEL_PROTOCOL = 'openai-responses';
 const DEFAULT_MINIMAX_VOICE_ID = 'Chinese_deep_voiced_male_nv1';
 const BUILTIN_FUNASR_REF = 'builtin/funasr';
 const DEFAULT_FUNASR_BASE_URL = 'http://127.0.0.1:8000/v1';
+const BUILTIN_FIRERED_REF = 'builtin/firered';
+const DEFAULT_FIRERED_BASE_URL = 'http://127.0.0.1:8001/v1';
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -62,7 +64,7 @@ function normalizeProvider(id, input = {}) {
       note: normalizeString(raw.note),
     };
     if (type === 'asr') {
-      entry.backend = raw.backend === 'funasr' ? 'funasr' : 'mimo';
+      entry.backend = ['funasr', 'firered'].includes(raw.backend) ? raw.backend : 'mimo';
     }
     if (type === 'text') {
       entry.supportsMultimodal = raw.supportsMultimodal === true;
@@ -89,7 +91,7 @@ function normalizeActive(input = {}) {
   const active = {};
   for (const type of MODEL_TYPES) {
     const raw = normalizeString(input[type]);
-    active[type] = raw || (type === 'asr' ? BUILTIN_FUNASR_REF : '');
+    active[type] = type === 'asr' && (!raw || raw === BUILTIN_FUNASR_REF) ? BUILTIN_FIRERED_REF : raw;
   }
   return active;
 }
@@ -115,7 +117,14 @@ function normalizeStoredConfig(input = {}, previous = {}) {
     pythonPath: normalizeString(localAsrInput?.pythonPath ?? previous.localAsr?.pythonPath),
     modelCache: normalizeString(localAsrInput?.modelCache ?? previous.localAsr?.modelCache),
   };
-  return { providers, active, skipValidation, localAsr };
+  // 新默认不继承旧 FunASR 环境、端口或 ModelScope 缓存。
+  const fireRedInput = input.localFireRed ?? previous.localFireRed;
+  const localFireRed = {
+    baseUrl: normalizeBaseUrl(fireRedInput?.baseUrl) || DEFAULT_FIRERED_BASE_URL,
+    pythonPath: normalizeString(fireRedInput?.pythonPath ?? previous.localFireRed?.pythonPath),
+    modelCache: normalizeString(fireRedInput?.modelCache ?? previous.localFireRed?.modelCache),
+  };
+  return { providers, active, skipValidation, localAsr, localFireRed };
 }
 
 function migrateOldConfig(old) {
@@ -196,6 +205,7 @@ function toPublicConfig(stored) {
     active: config.active,
     skipValidation: config.skipValidation,
     localAsr: config.localAsr,
+    localFireRed: config.localFireRed,
   };
 }
 
@@ -221,13 +231,13 @@ function resolveActiveConfig(type, stored) {
   const config = normalizeStoredConfig(stored);
   const activeRef = config.active[type];
   if (!activeRef) return null;
-  if (type === 'asr' && activeRef === BUILTIN_FUNASR_REF) {
+  if (type === 'asr' && activeRef === BUILTIN_FIRERED_REF) {
     return {
-      enabled: true, builtin: true, provider: 'funasr', providerName: 'FunASR（本地）',
-      backend: 'funasr', protocol: 'openai-transcription', modelId: 'paraformer',
-      baseUrl: config.localAsr.baseUrl, pythonPath: config.localAsr.pythonPath,
-      modelCache: config.localAsr.modelCache,
-      apiKey: '', note: '内置本地 ASR，无需 API Key。',
+      enabled: true, builtin: true, provider: 'firered', providerName: 'FireRed（本地）',
+      backend: 'firered', protocol: 'openai-transcription', modelId: 'fireredasr2-aed',
+      baseUrl: config.localFireRed.baseUrl, pythonPath: config.localFireRed.pythonPath,
+      modelCache: config.localFireRed.modelCache,
+      apiKey: '', note: '本地 AED 识别及 CTC 字词对齐，无需 API Key。',
     };
   }
 
@@ -241,12 +251,13 @@ function resolveActiveConfig(type, stored) {
   const model = provider.models[modelType];
   if (!model || !model.enabled || !model.modelId) return null;
 
-  const isFunasr = modelType === 'asr' && model.backend === 'funasr';
+  const isFunasr = modelType === 'asr' && ['funasr', 'firered'].includes(model.backend);
+  const prefix = model.backend === 'firered' ? 'FIRERED' : 'FUNASR';
   const apiKey = provider.apiKey || (isFunasr
-    ? normalizeString(process.env.FUNASR_API_KEY || process.env.ASR_API_KEY)
+    ? normalizeString(process.env[`${prefix}_API_KEY`] || process.env.ASR_API_KEY)
     : envFallback(type, 'api_key', providerId));
   const baseUrl = provider.baseUrl || (isFunasr
-    ? normalizeBaseUrl(process.env.FUNASR_BASE_URL || process.env.ASR_BASE_URL)
+    ? normalizeBaseUrl(process.env[`${prefix}_BASE_URL`] || process.env.ASR_BASE_URL)
     : envFallback(type, 'base_url', providerId));
 
   const result = {
@@ -340,6 +351,8 @@ module.exports = {
   DEFAULT_MINIMAX_VOICE_ID,
   BUILTIN_FUNASR_REF,
   DEFAULT_FUNASR_BASE_URL,
+  BUILTIN_FIRERED_REF,
+  DEFAULT_FIRERED_BASE_URL,
   getPublicConfig,
   resolveProviderDraft,
   saveConfig,

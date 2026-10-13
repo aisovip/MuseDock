@@ -41,8 +41,42 @@ function asrSegmentTiming(chunk, evidence, durationMs, settings) {
     previous = Math.min(durationMs, sentence.endMs);
     return { id: chunk.id + '_asr_' + index, text: sentence.text, startMs: sentence.startMs, endMs: previous };
   });
-  return { timingKind: 'asr_sentences', provider: 'funasr', durationMs, cues, captions: displayFromCues(cues, settings),
+  if (evidence.provider === 'firered') {
+    return { timingKind: 'asr_words', provider: 'firered', durationMs, cues,
+      captions: displayFromAsrWords(chunk, evidence, durationMs, settings), evidenceKind: 'ctc_forced_aligned_words' };
+  }
+  return { timingKind: 'asr_sentences', provider: evidence.provider || 'funasr', durationMs, cues, captions: displayFromCues(cues, settings),
     evidenceKind: 'sentence_timestamps_with_display_allocation' };
+}
+function displayFromAsrWords(chunk, evidence, durationMs, settings) {
+  const words = evidence.words;
+  if (evidence.timingSource !== 'firered_aed_ctc_forced_alignment' || !Array.isArray(words) || !words.length
+    || letters(words.map(word => word.text).join('')).join('') !== letters(chunk.text).join('')) {
+    throw new ErrorType('NARRATION_EVIDENCE_INVALID', 'FireRed 字词声学证据缺失或与正文不一致。');
+  }
+  let previous = 0;
+  const characters = words.flatMap(word => {
+    if (!Number.isInteger(word.startMs) || !Number.isInteger(word.endMs) || word.startMs < previous
+      || word.endMs <= word.startMs || word.endMs > durationMs) throw new ErrorType('NARRATION_EVIDENCE_INVALID', 'FireRed 字词时间点无效。');
+    previous = word.endMs;
+    // 同一英文词中的字符共用该词证据，不按字数细分估算时间。
+    return letters(word.text).map(() => word);
+  });
+  const fontSize = subtitleStyleFor(settings, settings.aspectRatio).fontSize;
+  const result = [];
+  let position = 0;
+  for (const part of splitCaption(chunk.text, settings.narrationLanguage, settings.aspectRatio, fontSize)) {
+    const count = letters(part).length;
+    if (!count) continue;
+    const caption = { id: chunk.id + '_word_' + result.length, sourceCueId: chunk.id,
+      text: part.replace(/\s+/gu, ' ').trim(), startMs: characters[position].startMs, endMs: characters[position + count - 1].endMs };
+    position += count;
+    if (result.length && caption.startMs < result.at(-1).endMs) {
+      result.at(-1).text += (settings.narrationLanguage === 'zh-CN' ? '' : ' ') + caption.text;
+      result.at(-1).endMs = caption.endMs;
+    } else result.push(caption);
+  }
+  return result;
 }
 function displayFromCues(cues, settings, planned = false) {
   const fontSize = subtitleStyleFor(settings, settings.aspectRatio).fontSize;
@@ -93,7 +127,8 @@ function assembleTiming(plan, segments) {
     offset += segment.durationMs;
     sceneRanges.get(segment.sceneId).endMs = offset;
   }
-  const timing = { timingKind: segments.every(item => item.timing.timingKind === 'provider_native_words') ? 'provider_native_words' : 'asr_sentences',
+  const timing = { timingKind: segments.every(item => item.timing.timingKind === 'provider_native_words') ? 'provider_native_words'
+    : segments.every(item => item.timing.timingKind === 'asr_words') ? 'asr_words' : 'asr_sentences',
     provider: segments[0]?.timing.provider, durationMs: offset, cues, scenes: plan.scenes.map(scene => sceneRanges.get(scene.id)),
     segmentIdentities: segments.map(item => item.identity) };
   if (timing.scenes.some(scene => !scene || scene.endMs - scene.startMs < 1000 / FPS)) throw new ErrorType('TIMELINE_INVALID', '部分分镜不足一帧，请合并短句后重新确认。');
@@ -109,12 +144,13 @@ function quantizedScenes(timing) {
 }
 async function displayCaptions(state, readEvidence) {
   const timing = state.narration.timing;
-  if (timing.timingKind !== 'provider_native_words') return displayFromCues(timing.cues, state.settings, timing.timingKind === 'planned');
+  if (!['provider_native_words', 'asr_words'].includes(timing.timingKind)) return displayFromCues(timing.cues, state.settings, timing.timingKind === 'planned');
   const result = [];
   let offset = 0;
   for (const segment of state.narration.segments) {
     const evidence = await readEvidence(segment.evidenceId);
-    const part = nativeSegmentTiming(segment, evidence, segment.durationMs, state.settings);
+    const part = timing.timingKind === 'asr_words' ? asrSegmentTiming(segment, evidence, segment.durationMs, state.settings)
+      : nativeSegmentTiming(segment, evidence, segment.durationMs, state.settings);
     result.push(...part.captions.map(cue => ({ ...cue, startMs: cue.startMs + offset, endMs: cue.endMs + offset })));
     offset += segment.durationMs;
   }

@@ -38,10 +38,10 @@ export function ModelSettings({ modelSettings }) {
         providerList={modelSettings.providerList}
         activeModels={modelSettings.activeModels}
         onChange={modelSettings.setActive}
-        localAsr={modelSettings.state.localAsr}
-        onLocalAsrBaseUrlChange={modelSettings.setLocalAsrBaseUrl}
-        onLocalAsrPythonPathChange={modelSettings.setLocalAsrPythonPath}
-        onLocalAsrModelCacheChange={modelSettings.setLocalAsrModelCache}
+        localFireRed={modelSettings.state.localFireRed}
+        onLocalFireRedBaseUrlChange={modelSettings.setLocalFireRedBaseUrl}
+        onLocalFireRedPythonPathChange={modelSettings.setLocalFireRedPythonPath}
+        onLocalFireRedModelCacheChange={modelSettings.setLocalFireRedModelCache}
         disabled={modelSettings.loading || modelSettings.saving}
       />
 

@@ -238,7 +238,7 @@ export function TranscriptionTool({ compact = false }) {
               </div>
               {loading ? <p className="m-0 flex items-center gap-2 text-sm text-muted-foreground" role="status"><LoaderCircle className="size-4 animate-spin" />正在读取转写配置...</p> : (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>{capabilities?.asrReady ? `FunASR · ${capabilities.asrModel}` : '尚未配置 FunASR'}
+                  <span>{capabilities?.asrReady ? `${capabilities.asrProvider === 'firered' ? 'FireRed' : 'FunASR'} · ${capabilities.asrModel}` : '尚未配置本地 ASR'}
                     {autoCorrect && (capabilities?.textReady ? ` · 校订：${capabilities.textModel}` : ' · 尚未配置分析模型')}</span>
                   <Link to="/settings?section=models" state={{ from: window.location.pathname }} onClick={() => setOpen(false)} className="underline underline-offset-4">配置模型</Link>
                 </div>
@@ -282,7 +282,8 @@ export function TranscriptionTool({ compact = false }) {
 
             {job?.result && <section className="grid gap-3" aria-label="转写结果">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>{(job.result.durationMs / 1000).toFixed(1)} 秒 · {job.result.sentenceCount} 条字幕</span>
+                <span>{(job.result.durationMs / 1000).toFixed(1)} 秒 · {job.result.sentenceCount} 条字幕
+                  {!!job.result.words?.length && ` · ${job.result.words.length} 个字词时间点`}</span>
                 {job.correctionCount !== undefined && <span>已校订 {job.correctionCount} 条</span>}
               </div>
               <Tabs value={version} onValueChange={value => { setVersion(value); setNotice(''); fileActions.clearMessage(); }}>
@@ -290,16 +291,18 @@ export function TranscriptionTool({ compact = false }) {
                   <TabsTrigger value="raw" disabled={fileActions.opening}>原始转写</TabsTrigger>
                   <TabsTrigger value="corrected" disabled={fileActions.opening || !job.result.correctedText}>校订版</TabsTrigger>
                 </TabsList>
-                <TabsContent value="raw"><pre className="m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-3 font-sans text-sm leading-7">{job.result.rawText}</pre></TabsContent>
+                <TabsContent value="raw"><pre className="m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-3 font-sans text-sm leading-7">{job.result.status === 'no_speech_detected' ? '未检测到可转写的人声。' : job.result.rawText}</pre></TabsContent>
                 <TabsContent value="corrected"><pre className="m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-3 font-sans text-sm leading-7">{job.result.correctedText}</pre></TabsContent>
               </Tabs>
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={copyText}><Copy />复制文本</Button>
+                <Button variant="outline" size="sm" onClick={copyText} disabled={!job.result.rawText}><Copy />复制文本</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(textKind)} disabled={fileActions.opening || !job.files[textKind]}><FileText />打开 TXT</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(srtKind)} disabled={fileActions.opening || !job.files[srtKind]}><FileText />打开 SRT</Button>
                 <Button variant="outline" size="sm" onClick={() => openFile(srtKind, 'folder')} disabled={fileActions.opening || !job.files[srtKind]}><FolderOpen />打开所在文件夹</Button>
+                {job.files.rawJson && <Button variant="outline" size="sm" onClick={() => openFile('rawJson')} disabled={fileActions.opening}><FileText />打开原始转写 JSON</Button>}
                 {job.files.corrections && <Button variant="ghost" size="sm" onClick={() => openFile('corrections')} disabled={fileActions.opening}>打开校订记录</Button>}
               </div>
+              {!!job.result.words?.length && job.result.correctedText && <p className="m-0 text-xs text-muted-foreground">字词时间点属于原始转写；文本校订没有重新进行音频对齐。</p>}
               {(fileActions.message || notice) && <p role={fileActions.error ? 'alert' : 'status'} className={`m-0 flex items-center gap-2 text-xs ${fileActions.error ? 'text-danger' : 'text-muted-foreground'}`}>
                 {fileActions.opening && <LoaderCircle className="size-3.5 animate-spin" />}{fileActions.message || notice}
               </p>}

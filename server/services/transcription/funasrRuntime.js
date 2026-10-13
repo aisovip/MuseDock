@@ -15,8 +15,8 @@ const PYTHON_CHECK = [
   'sys.exit(0 if sys.version_info >= (3, 10) and all(importlib.util.find_spec(name) for name in names) else 1)',
 ].join('\n');
 
-function localTarget(config) {
-  if (!config.builtin || config.provider !== 'funasr') return null;
+function localTarget(config, provider = 'funasr') {
+  if (!config.builtin || config.provider !== provider) return null;
   const endpoint = new URL(transcriptionEndpoint(config.baseUrl));
   if (endpoint.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) return null;
   // 启动锁合并 localhost 别名，但探测保留原地址，以复用仅监听 IPv6 的现有服务。
@@ -43,12 +43,16 @@ function startupError(diagnostic = '') {
 
 function createFunasrRuntime(options = {}) {
   const env = options.env || process.env;
+  const fireRed = options.backend === 'firered';
+  const prefix = fireRed ? 'FIRERED' : 'FUNASR';
+  const dataRoot = options.dataRoot || require('../../dataRoot');
+  const modelCacheDefault = path.join(dataRoot, 'data/models/firered');
   const fetchImpl = recordedFetch(options.fetchImpl || globalThis.fetch, { category: 'transcription' });
   const spawnImpl = options.spawnImpl || spawn;
   const runPython = options.execute || execute;
   const starts = new Map();
   const children = new Map();
-  const configuredTimeout = Number(env.FUNASR_START_TIMEOUT_MS);
+  const configuredTimeout = Number(env[`${prefix}_START_TIMEOUT_MS`]);
   const startTimeoutMs = options.startTimeoutMs ?? (Number.isFinite(configuredTimeout) && configuredTimeout > 0
     ? Math.min(configuredTimeout, 1800000) : 300000);
   const probeTimeoutMs = options.probeTimeoutMs ?? 1500;
@@ -68,6 +72,14 @@ function createFunasrRuntime(options = {}) {
   async function probe(target, timeoutMs = probeTimeoutMs) {
     const health = await getJson(`${target.endpoint.origin}/health`, timeoutMs);
     if (health.stopped) return 'stopped';
+    if (fireRed) {
+      if (health.ok && health.payload?.status === 'ready' && health.payload?.model === 'fireredasr2-aed'
+        && health.payload?.timing_source === 'firered_aed_ctc_forced_alignment' && health.payload?.word_timestamps === true
+        && health.payload?.runtime_version === 'firered-aed-ctc-int8-v1') return 'ready';
+      if ([401, 403].includes(health.status)) throw new TranscriptionError('ASR_LOCAL_AUTH_REQUIRED', 'FireRed 服务需要鉴权，请改用供应商配置填写凭据。', 401);
+      // 只有模型目录无法证明该服务具备字词对齐能力。
+      throw new TranscriptionError('ASR_PORT_IN_USE', '该地址已有服务，但未通过 FireRed 字词对齐能力检查，请检查服务版本或更换端口。', 503);
+    }
     if (health.ok && health.payload?.status === 'ready' && health.payload?.model === 'paraformer'
       && health.payload?.timing_source === 'funasr_sentence_info') return 'ready';
     if (['loading', 'starting'].includes(health.payload?.status)) return 'loading';
@@ -86,11 +98,11 @@ function createFunasrRuntime(options = {}) {
   }
 
   async function findPython(config) {
-    const explicit = String(env.FUNASR_PYTHON || config.pythonPath || '').trim();
+    const explicit = String(env[`${prefix}_PYTHON`] || config.pythonPath || '').trim();
     const executable = process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python';
     const dataRoot = options.dataRoot || require('../../dataRoot');
     const projectRoot = options.projectRoot || PROJECT_ROOT;
-    const candidates = explicit ? [explicit] : [
+    const candidates = explicit ? [explicit] : fireRed ? [path.join(dataRoot, 'data/runtime/firered', executable)] : [
       path.join(dataRoot, 'data/runtime/funasr', executable),
       path.join(projectRoot, '.venv-funasr', executable),
       ...(env.VIRTUAL_ENV ? [path.join(env.VIRTUAL_ENV, executable)] : []),
@@ -99,13 +111,18 @@ function createFunasrRuntime(options = {}) {
     for (const candidate of new Set(candidates)) {
       if (path.isAbsolute(candidate) && !fs.existsSync(candidate)) continue;
       try {
-        await runPython(candidate, ['-B', '-c', PYTHON_CHECK], {
+        await runPython(candidate, ['-B', '-c', fireRed ? [
+          'import sys, sherpa_onnx, onnxruntime, kaldi_native_fbank, numpy, soundfile',
+          'assert (3,11) <= sys.version_info[:2] < (3,13)',
+          'assert sherpa_onnx.__version__ == "1.13.8" and onnxruntime.__version__ == "1.31.0"',
+        ].join('\n') : PYTHON_CHECK], {
           cwd: projectRoot, env: { ...env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
           windowsHide: true, shell: false, timeout: 10000, maxBuffer: 64 * 1024,
         });
         return candidate;
       } catch { /* 候选环境只检查依赖，不加载模型，也不自动安装包。 */ }
     }
+    if (fireRed) throw new TranscriptionError('ASR_PYTHON_NOT_READY', '未找到可用的 FireRed Python 3.11/3.12 环境，请运行 npm run setup:asr；已有环境请按 FireRed 安装说明补齐固定版本依赖。', 503);
     throw new TranscriptionError('ASR_PYTHON_NOT_READY', explicit
       ? '配置的 FunASR Python 无法运行或缺少依赖，请检查“FunASR Python 路径”并按安装说明补齐依赖。'
       : '未找到已安装 FunASR 的 Python 环境。请在模型设置中填写“FunASR Python 路径”，或按安装说明创建项目的 .venv-funasr 环境。', 503);
@@ -120,10 +137,14 @@ function createFunasrRuntime(options = {}) {
 
   function launch(target, python, config) {
     let child;
-    const modelCache = String(env.MODELSCOPE_CACHE || config.modelCache || '').trim();
+    const modelCache = String((fireRed ? env.FIRERED_MODEL_CACHE : env.MODELSCOPE_CACHE) || config.modelCache || (fireRed ? modelCacheDefault : '')).trim();
+    if (fireRed && !(options.modelsReady ? options.modelsReady(modelCache) : fs.existsSync(path.join(modelCache, 'installed.json')))) {
+      throw new TranscriptionError('ASR_MODELS_NOT_READY', 'FireRed 识别及字词对齐模型尚未安装，请运行 npm run setup:asr；自定义缓存需使用 --model-cache 指定同一目录。', 503);
+    }
     try {
-      child = spawnImpl(python, ['-B', SERVER_SCRIPT, '--host', target.host, '--port', String(target.port),
-        '--device', env.FUNASR_DEVICE || 'cpu', '--parent-stdin',
+      child = spawnImpl(python, ['-B', fireRed ? path.join(__dirname, '../../resources/firered/server.py') : SERVER_SCRIPT,
+        '--host', target.host, '--port', String(target.port),
+        ...(fireRed ? [] : ['--device', env.FUNASR_DEVICE || 'cpu']), '--parent-stdin',
         ...(modelCache ? ['--model-cache', modelCache] : [])], {
         cwd: options.projectRoot || PROJECT_ROOT, shell: false, windowsHide: true,
         stdio: ['pipe', 'ignore', 'pipe'],
@@ -165,7 +186,7 @@ function createFunasrRuntime(options = {}) {
       const current = await probe(target);
       if (current === 'ready') return { started: false };
       if (current === 'stopped') {
-        await report('正在启动 FunASR 并加载模型，首次运行可能需要下载模型...');
+        await report(fireRed ? '正在启动 FireRed 并加载识别与字词对齐模型...' : '正在启动 FunASR 并加载模型，首次运行可能需要下载模型...');
         state = launch(target, python, config);
       }
     }
@@ -190,8 +211,8 @@ function createFunasrRuntime(options = {}) {
   }
 
   async function ensure(config, { onProgress } = {}) {
-    const target = localTarget(config);
-    if (!target || env.FUNASR_AUTO_START === '0') return { started: false };
+    const target = localTarget(config, fireRed ? 'firered' : 'funasr');
+    if (!target || env[`${prefix}_AUTO_START`] === '0') return { started: false };
     let entry = starts.get(target.key);
     if (!entry) {
       entry = { listeners: new Set() };
@@ -200,9 +221,17 @@ function createFunasrRuntime(options = {}) {
         for (const listener of entry.listeners) await listener({ message });
       })).finally(() => starts.delete(target.key));
     }
-    if (onProgress) entry.listeners.add(onProgress);
+    const listener = onProgress && (event => onProgress({ ...event, message: fireRed ? event.message.replaceAll('FunASR', 'FireRed') : event.message }));
+    if (listener) entry.listeners.add(listener);
     try { return await entry.promise; }
-    finally { if (onProgress) entry.listeners.delete(onProgress); }
+    catch (error) {
+      if (fireRed && error instanceof TranscriptionError) {
+        error.message = error.message.replaceAll('FunASR', 'FireRed');
+        if (error.code === 'ASR_DEPENDENCIES_MISSING') error.message = 'FireRed Python 依赖缺失或不兼容，请运行 npm run setup:asr 修复独立环境。';
+      }
+      throw error;
+    }
+    finally { if (listener) entry.listeners.delete(listener); }
   }
 
   return { ensure, close() { for (const state of children.values()) stop(state); } };

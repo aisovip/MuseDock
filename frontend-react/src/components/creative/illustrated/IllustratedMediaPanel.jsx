@@ -17,7 +17,7 @@ export function IllustratedAudioPanel({workflow,busy,onAct,onConfirm}) {
       <p className="mb-0 mt-1 text-xs leading-relaxed text-fg-3">{enabled?'先完整试听，确认读音与实际时长后再生图。':'按目标时长和字幕阅读预算安排画面，不调用 TTS 或 ASR。'}</p></div>
     {n?<div className={cn('grid gap-3 rounded-md border p-4',s.narrationCurrent?'border-line-1 bg-surface-2':'border-warn')}>
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-semibold">{s.narrationCurrent?'当前时间轴':'旧时间轴 · 需要更新'}</span><span className="font-mono text-xs text-fg-3">{durationLabel(n.actualDurationMs)}</span></div>
-      <p className="m-0 text-xs text-fg-3">目标 {durationLabel(s.settings.targetDurationSeconds*1000)} · {n.timing.timingKind==='planned'?'计划分配（无配音）':n.timing.timingKind==='provider_native_words'?'同请求原生字幕时间点':'FunASR 句级时间点，长句显示时间单独分配'}</p>
+      <p className="m-0 text-xs text-fg-3">目标 {durationLabel(s.settings.targetDurationSeconds*1000)} · {n.timing.timingKind==='planned'?'计划分配（无配音）':n.timing.timingKind==='provider_native_words'?'同请求原生字幕时间点':n.timing.timingKind==='asr_words'?'FireRed 字词声学对齐时间点':'ASR 句级时间点，长句显示时间单独分配'}</p>
       {enabled&&s.artifacts[n.audioId]?<audio ref={audioRef} controls className="w-full" src={s.artifacts[n.audioId].url} aria-label="完整旁白试听"/>:null}
       {enabled&&n.deviation>0.1?<p className="m-0 text-sm leading-relaxed text-warn">实际配音与目标偏差 {Math.round(n.deviation*100)}%。可以接受实际时长，或返回文稿／声音设置后重新生成。系统不会静默变速或截断。</p>:null}
       {segments.length?<details><summary className="cursor-pointer py-2 text-xs text-fg-2">按分段定位试听（{segments.length} 段）</summary>

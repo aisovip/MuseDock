@@ -29,6 +29,7 @@
     "test:filter": "node tests/run-all.js",
     "test:ai-text": "node tests/test-ai-text-model.js",
     "setup:whiteboard": "node scripts/setup-whiteboard.cjs",
+    "setup:asr": "node scripts/setup-asr.cjs",
     "eval:quality": "node scripts/quality-eval/index.js"
   },
   "dependencies": {
@@ -73,6 +74,7 @@
       "!server/**/*.backup",
       "!server/**/__pycache__/**",
       "scripts/setup-whiteboard.cjs",
+      "scripts/setup-asr.cjs",
       "frontend-dist/**/*",
       "docs/frame/**/*",
       "assets/**/*"

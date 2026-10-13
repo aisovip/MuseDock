@@ -309,6 +309,24 @@ async function run() {
     assert.equal((await fsp.readdir(attemptsRoot)).length, 2, '每次校订的响应分别留存');
     assert.equal(await fsp.readFile(responsePath, 'utf8'), responseText, '重试不能覆盖之前的响应证据');
     assert.deepEqual({ downloads, transcriptions }, beforeEvidenceRetry);
+    // FireRed 静音是有效空结果，不能变成失败，也不能调用文本模型编造字幕。
+    const noSpeechService = createTranscriptionService({ ...fixture,
+      rootDir: path.join(root, 'no-speech'), ensureLocalAsrService: async () => {},
+      resolveAsrRuntime: async () => ({ configured: true, provider: 'firered', baseUrl: 'http://localhost:8001/v1', modelId: 'fireredasr2-aed' }),
+      transcribeAudio: async () => ({ success: true, status: 'no_speech_detected', text: '', sentences: [], words: [],
+        durationMs: 1600, requestCount: 1, missingRanges: [], timingSource: 'firered_aed_ctc_forced_alignment' }),
+    });
+    const correctionsBeforeSilence = corrections;
+    const silentJob = await noSpeechService.create({ source, autoCorrect: true });
+    await noSpeechService.waitForIdle();
+    const silent = await noSpeechService.get(silentJob.id);
+    assert.equal(silent.status, 'succeeded');
+    assert.equal(silent.result.status, 'no_speech_detected');
+    assert.equal(silent.result.sentenceCount, 0);
+    assert.ok(silent.files.rawJson);
+    assert.equal(silent.files.rawSrt, undefined);
+    assert.equal(corrections, correctionsBeforeSilence);
+    assert.match(silent.message, /未检测到/);
   } finally {
     await service.waitForIdle();
     await new Promise(resolve => server.close(resolve));

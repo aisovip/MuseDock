@@ -53,7 +53,7 @@ async function run() {
     const job = { id, autoCorrect: req.body.autoCorrect, extractFrames: req.body.extractFrames,
       frameCount: req.body.frameCount, frames: [], status: 'running', stage: 'starting_asr', progress: 2,
       createdAt: timestamp, updatedAt: timestamp,
-      message: '正在启动 FunASR 并加载模型...', source: { title: number === 1 ? '家乡的月光' : '窗前的月光', url: req.body.source }, files: {} };
+      message: '正在启动 FireRed 并加载模型...', source: { title: number === 1 ? '家乡的月光' : '窗前的月光', url: req.body.source }, files: {} };
     jobs.set(id, job);
     res.status(202).json({ success: true, data: job });
     setTimeout(() => {
@@ -130,28 +130,34 @@ async function run() {
     const asrSelector = page.getByRole('combobox', { name: 'ASR 转写', exact: true });
     await asrSelector.waitFor();
     await page.getByText('暂无供应商，点击上方添加。', { exact: true }).waitFor();
-    assert.match(await asrSelector.innerText(), /FunASR（本地，默认）/);
-    assert.equal(await page.getByRole('textbox', { name: 'FunASR 服务地址', exact: true }).inputValue(), aiModelConfig.DEFAULT_FUNASR_BASE_URL);
+    assert.match(await asrSelector.innerText(), /FireRed（本地，默认）/);
+    await page.getByRole('button', { name: '本地服务设置', exact: true }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'FireRed 服务地址', exact: true }).inputValue(), aiModelConfig.DEFAULT_FIRERED_BASE_URL);
+    await page.locator('[data-slot=dialog-footer]').getByRole('button', { name: '关闭', exact: true }).click();
     await asrSelector.click();
-    await page.getByRole('option', { name: 'FunASR（本地，默认）', exact: true }).click();
-    await page.getByRole('textbox', { name: 'FunASR 服务地址', exact: true }).fill('http://127.0.0.1:18000/v1');
-    await page.getByRole('textbox', { name: 'FunASR Python 路径（可选）', exact: true }).fill('C:/测试环境/python.exe');
-    await page.getByRole('textbox', { name: 'FunASR 模型缓存目录（可选）', exact: true }).fill('C:/测试模型');
+    await page.getByRole('option', { name: 'FireRed（本地，默认）', exact: true }).click();
+    await page.getByRole('button', { name: '本地服务设置', exact: true }).click();
+    await page.getByRole('textbox', { name: 'FireRed 服务地址', exact: true }).fill('http://127.0.0.1:18000/v1');
+    await page.getByRole('textbox', { name: 'FireRed Python 路径（可选）', exact: true }).fill('C:/测试环境/python.exe');
+    await page.getByRole('textbox', { name: 'FireRed 模型缓存目录（可选）', exact: true }).fill('C:/测试模型');
+    await page.locator('[data-slot=dialog-footer]').getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('button', { name: '保存模型配置', exact: true }).click();
     await page.getByText('配置已保存', { exact: true }).waitFor();
     const savedLocal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(savedLocal.providers, {});
-    assert.equal(savedLocal.active.asr, aiModelConfig.BUILTIN_FUNASR_REF);
-    assert.equal(savedLocal.localAsr.baseUrl, 'http://127.0.0.1:18000/v1');
-    assert.equal(savedLocal.localAsr.pythonPath, 'C:/测试环境/python.exe');
-    assert.equal(savedLocal.localAsr.modelCache, 'C:/测试模型');
-    assert.equal(await page.locator('input[type="password"]').count(), 0, '内置 FunASR 不需要填写 API Key');
+    assert.equal(savedLocal.active.asr, aiModelConfig.BUILTIN_FIRERED_REF);
+    assert.equal(savedLocal.localFireRed.baseUrl, 'http://127.0.0.1:18000/v1');
+    assert.equal(savedLocal.localFireRed.pythonPath, 'C:/测试环境/python.exe');
+    assert.equal(savedLocal.localFireRed.modelCache, 'C:/测试模型');
+    assert.equal(await page.locator('input[type="password"]').count(), 0, '内置 FireRed 不需要填写 API Key');
     await page.reload();
     await page.getByText('配置已加载', { exact: true }).waitFor();
-    assert.match(await asrSelector.innerText(), /FunASR（本地，默认）/);
-    assert.equal(await page.getByRole('textbox', { name: 'FunASR 服务地址', exact: true }).inputValue(), savedLocal.localAsr.baseUrl);
-    assert.equal(await page.getByRole('textbox', { name: 'FunASR Python 路径（可选）', exact: true }).inputValue(), savedLocal.localAsr.pythonPath);
-    assert.equal(await page.getByRole('textbox', { name: 'FunASR 模型缓存目录（可选）', exact: true }).inputValue(), savedLocal.localAsr.modelCache);
+    assert.match(await asrSelector.innerText(), /FireRed（本地，默认）/);
+    await page.getByRole('button', { name: '本地服务设置', exact: true }).click();
+    assert.equal(await page.getByRole('textbox', { name: 'FireRed 服务地址', exact: true }).inputValue(), savedLocal.localFireRed.baseUrl);
+    assert.equal(await page.getByRole('textbox', { name: 'FireRed Python 路径（可选）', exact: true }).inputValue(), savedLocal.localFireRed.pythonPath);
+    assert.equal(await page.getByRole('textbox', { name: 'FireRed 模型缓存目录（可选）', exact: true }).inputValue(), savedLocal.localFireRed.modelCache);
+    await page.locator('[data-slot=dialog-footer]').getByRole('button', { name: '关闭', exact: true }).click();
 
     // 已保存的云端选择仍可使用，并可直接切回内置模型，供应商配置不受影响。
     await aiModelConfig.saveConfig({ providers: { fixture: {
@@ -163,17 +169,17 @@ async function run() {
     await page.getByText('配置已加载', { exact: true }).waitFor();
     assert.match(await asrSelector.innerText(), /mimo-v2.5-asr/);
     await asrSelector.click();
-    await page.getByRole('option', { name: 'FunASR（本地，默认）', exact: true }).click();
+    await page.getByRole('option', { name: 'FireRed（本地，默认）', exact: true }).click();
     await page.getByRole('button', { name: '保存模型配置', exact: true }).click();
     await page.getByText('配置已保存', { exact: true }).waitFor();
     const selectedLocal = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    assert.equal(selectedLocal.active.asr, aiModelConfig.BUILTIN_FUNASR_REF);
+    assert.equal(selectedLocal.active.asr, aiModelConfig.BUILTIN_FIRERED_REF);
     assert.equal(selectedLocal.providers.fixture.apiKey, 'fixture-key-only');
-    assert.equal(selectedLocal.localAsr.baseUrl, savedLocal.localAsr.baseUrl);
-    assert.equal(selectedLocal.localAsr.pythonPath, savedLocal.localAsr.pythonPath);
-    assert.equal(selectedLocal.localAsr.modelCache, savedLocal.localAsr.modelCache);
+    assert.equal(selectedLocal.localFireRed.baseUrl, savedLocal.localFireRed.baseUrl);
+    assert.equal(selectedLocal.localFireRed.pythonPath, savedLocal.localFireRed.pythonPath);
+    assert.equal(selectedLocal.localFireRed.modelCache, savedLocal.localFireRed.modelCache);
     assert.equal((await service.capabilities()).asrReady, true);
-    await page.screenshot({ path: path.join(os.tmpdir(), 'musedock-local-funasr-settings.png'), fullPage: true });
+    await page.screenshot({ path: path.join(os.tmpdir(), 'musedock-local-firered-settings.png'), fullPage: true });
 
     await page.goto(`${appUrl}/creative`);
     await page.getByRole('button', { name: '打开抖音转写工具' }).click();
@@ -197,7 +203,7 @@ async function run() {
     assert.equal(await dialog.getByRole('spinbutton', { name: '抽帧数量' }).count(), 0);
     await dialog.getByRole('textbox', { name: '抖音链接或分享文案' }).fill('https://www.douyin.com/video/1234567890');
     await dialog.getByRole('button', { name: '开始转写', exact: true }).click();
-    await dialog.getByText('正在启动 FunASR 并加载模型...', { exact: true }).waitFor();
+    await dialog.getByText('正在启动 FireRed 并加载模型...', { exact: true }).waitFor();
     assert.equal(await dialog.getByRole('button', { name: '新建转写', exact: true }).isDisabled(), true);
     assert.equal(await deleteButton('fixture-1').isDisabled(), true, '运行中的转写不能删除');
     await dialog.getByText('转写完成，原始文本和字幕已保存。', { exact: true }).waitFor();
@@ -242,7 +248,7 @@ async function run() {
     assert.equal(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth), true, '窄屏抽帧表单不应横向溢出');
     await page.setViewportSize({ width: 1360, height: 960 });
     await dialog.getByRole('button', { name: '开始转写', exact: true }).click();
-    await dialog.getByText('正在启动 FunASR 并加载模型...', { exact: true }).waitFor();
+    await dialog.getByText('正在启动 FireRed 并加载模型...', { exact: true }).waitFor();
     await historyItem('fixture-1').click();
     await dialog.getByRole('tabpanel').getByText('家向的月光。', { exact: true }).waitFor();
     await page.waitForFunction(() => document.querySelector('[data-transcription-id="fixture-2"]')?.textContent.includes('已完成'));

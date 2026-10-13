@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
-import { BUILTIN_FUNASR_REF, DEFAULT_FUNASR_BASE_URL } from '../components/settings/modelDefaults.js';
+import { BUILTIN_FIRERED_REF, DEFAULT_FIRERED_BASE_URL } from '../components/settings/modelDefaults.js';
 
 const MODEL_TYPES = ['asr', 'text', 'image', 'video', 'tts'];
 const DEFAULT_MINIMAX_VOICE_ID = 'Chinese_deep_voiced_male_nv1';
@@ -51,10 +51,10 @@ function normalizeServerData(json) {
   }
   return {
     providers,
-    active: { ...json.active, asr: json.active?.asr || BUILTIN_FUNASR_REF },
+    active: { ...json.active, asr: json.active?.asr || BUILTIN_FIRERED_REF },
     skipValidation: !!json.skipValidation,
-    localAsr: { baseUrl: json.localAsr?.baseUrl || DEFAULT_FUNASR_BASE_URL,
-      pythonPath: json.localAsr?.pythonPath || '', modelCache: json.localAsr?.modelCache || '' },
+    localFireRed: { baseUrl: json.localFireRed?.baseUrl || DEFAULT_FIRERED_BASE_URL,
+      pythonPath: json.localFireRed?.pythonPath || '', modelCache: json.localFireRed?.modelCache || '' },
   };
 }
 
@@ -84,12 +84,12 @@ function toServerPayload(state) {
       models,
     };
   }
-  return { providers, active: state.active, skipValidation: state.skipValidation, localAsr: state.localAsr };
+  return { providers, active: state.active, skipValidation: state.skipValidation, localFireRed: state.localFireRed };
 }
 
 export function useSettings() {
-  const [state, setState] = useState({ providers: {}, active: { asr: BUILTIN_FUNASR_REF }, skipValidation: false,
-    localAsr: { baseUrl: DEFAULT_FUNASR_BASE_URL, pythonPath: '', modelCache: '' } });
+  const [state, setState] = useState({ providers: {}, active: { asr: BUILTIN_FIRERED_REF }, skipValidation: false,
+    localFireRed: { baseUrl: DEFAULT_FIRERED_BASE_URL, pythonPath: '', modelCache: '' } });
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -111,9 +111,9 @@ export function useSettings() {
     const result = {};
     for (const type of MODEL_TYPES) {
       const ref = state.active[type];
-      if (type === 'asr' && ref === BUILTIN_FUNASR_REF) {
-        result[type] = { ref, builtin: true, providerId: 'builtin', providerName: 'FunASR（本地）',
-          enabled: true, modelId: 'paraformer', backend: 'funasr' };
+      if (type === 'asr' && ref === BUILTIN_FIRERED_REF) {
+        result[type] = { ref, builtin: true, providerId: 'builtin', providerName: 'FireRed（本地）',
+          enabled: true, modelId: 'fireredasr2-aed', backend: 'firered' };
         continue;
       }
       if (!ref) { result[type] = null; continue; }
@@ -178,7 +178,7 @@ export function useSettings() {
       const newActive = { ...prev.active };
       for (const type of MODEL_TYPES) {
         if (newActive[type]?.startsWith(providerId + '/')) {
-          newActive[type] = type === 'asr' ? BUILTIN_FUNASR_REF : '';
+          newActive[type] = type === 'asr' ? BUILTIN_FIRERED_REF : '';
         }
       }
       return { ...prev, providers: newProviders, active: newActive };
@@ -191,7 +191,7 @@ export function useSettings() {
       ...prev,
       active: {
         ...prev.active,
-        [modelType]: providerId && modelTypeKey ? `${providerId}/${modelTypeKey}` : modelType === 'asr' ? BUILTIN_FUNASR_REF : '',
+        [modelType]: providerId && modelTypeKey ? `${providerId}/${modelTypeKey}` : modelType === 'asr' ? BUILTIN_FIRERED_REF : '',
       },
     }));
   }, []);
@@ -201,19 +201,19 @@ export function useSettings() {
     setState(prev => ({ ...prev, skipValidation: !!value }));
   }, []);
 
-  const setLocalAsrBaseUrl = useCallback((baseUrl) => {
+  const setLocalFireRedBaseUrl = useCallback((baseUrl) => {
     setDirty(true);
-    setState(prev => ({ ...prev, localAsr: { ...prev.localAsr, baseUrl } }));
+    setState(prev => ({ ...prev, localFireRed: { ...prev.localFireRed, baseUrl } }));
   }, []);
 
-  const setLocalAsrPythonPath = useCallback((pythonPath) => {
+  const setLocalFireRedPythonPath = useCallback((pythonPath) => {
     setDirty(true);
-    setState(prev => ({ ...prev, localAsr: { ...prev.localAsr, pythonPath } }));
+    setState(prev => ({ ...prev, localFireRed: { ...prev.localFireRed, pythonPath } }));
   }, []);
 
-  const setLocalAsrModelCache = useCallback((modelCache) => {
+  const setLocalFireRedModelCache = useCallback((modelCache) => {
     setDirty(true);
-    setState(prev => ({ ...prev, localAsr: { ...prev.localAsr, modelCache } }));
+    setState(prev => ({ ...prev, localFireRed: { ...prev.localFireRed, modelCache } }));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -223,7 +223,7 @@ export function useSettings() {
     status, loading, saving, dirty,
     load, save,
     saveProvider, removeProvider,
-    setActive, setSkipValidation, setLocalAsrBaseUrl, setLocalAsrPythonPath, setLocalAsrModelCache,
+    setActive, setSkipValidation, setLocalFireRedBaseUrl, setLocalFireRedPythonPath, setLocalFireRedModelCache,
     MODEL_TYPES, MODEL_TYPE_INFO,
     MODEL_PROTOCOLS,
   };

@@ -29,12 +29,14 @@ export function ModelConfigForm({ type, info, model, onChange }) {
               <SelectContent>
                 <SelectItem value="mimo">MiMo ASR</SelectItem>
                 <SelectItem value="funasr">FunASR（本地或自部署）</SelectItem>
+                <SelectItem value="firered">FireRed（自部署，含字词对齐）</SelectItem>
               </SelectContent>
             </Select>
           </label>
           {m.backend === 'funasr' ? (
-            <p className="m-0 text-xs leading-5 text-[#69717e]">普通本地使用可直接在全局 ASR 中选择内置 FunASR。这里用于配置自部署或需要鉴权的 FunASR 服务：模型 ID 填 paraformer，Base URL 填服务地址，API Key 按该服务要求填写。</p>
+            <p className="m-0 text-xs leading-5 text-[#69717e]">默认本地使用请在全局 ASR 中选择 FireRed。这里保留自部署 FunASR：模型 ID 填 paraformer，Base URL 填服务地址，API Key 按该服务要求填写。</p>
           ) : null}
+          {m.backend === 'firered' ? <p className="m-0 text-xs leading-5 text-[#69717e]">模型 ID 填 fireredasr2-aed，服务必须返回 AED 识别文字及 CTC 字词对齐证据。远程服务需自行部署，不会自动启动。</p> : null}
         </div>
       ) : null}
       {type === 'tts' && m.enabled ? (

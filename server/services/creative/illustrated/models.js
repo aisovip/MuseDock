@@ -3,7 +3,8 @@ const configService = require('../../ai/aiModelConfig');
 const textService = require('../../ai/aiTextModel');
 const imageService = require('../../ai/aiImageModel');
 const ttsService = require('../../ai/aiTtsModel');
-const { transcribeFunasrAudio } = require('../../transcription/funasr');
+const { transcribeFunasrAudio, TranscriptionError } = require('../../transcription/funasr');
+const { transcribeLocalAsrAudio } = require('../../transcription/localAsr');
 const { defaultWebSearchProvider } = require('../creativeResearchProvider');
 const { runWithApiCallContext, annotateApiCallResult } = require('../../diagnostics/apiCallRecorder');
 const { hash, ErrorType, PLAN_SKELETON, normalizePlan, canvasFor, imagePrompt } = require('./contracts');
@@ -35,7 +36,7 @@ async function runtime(type, options = {}) {
 function snapshot(config, type) {
   const allowed = ['enabled', 'provider', 'providerName', 'protocol', 'modelId', 'voiceId', 'doubao', 'backend', 'builtin', 'ttsConcurrency', 'ttsQueueIntervalMs', 'supportsMultimodal'];
   const parameters = Object.fromEntries(allowed.filter(key => config[key] !== undefined).map(key => [key, structuredClone(config[key])]));
-  const configured = type === 'tts' ? config.configured === true : !!(config.enabled && config.baseUrl && config.modelId && (config.apiKey || (type === 'asr' && config.backend === 'funasr')));
+  const configured = type === 'tts' ? config.configured === true : !!(config.enabled && config.baseUrl && config.modelId && (config.apiKey || (type === 'asr' && ['funasr', 'firered'].includes(config.backend))));
   return { type, configured, provider: config.provider || '', modelId: config.modelId || '', voiceId: config.voiceId || '',
     parameters, hash: hash({ parameters, endpoint: config.baseUrl || '' }) };
 }
@@ -53,7 +54,7 @@ async function resolveFrozen(state, types, options = {}) {
   if (result.tts && !['doubao','minimax','mimo'].includes(result.tts.provider)) throw new ErrorType('MODEL_CAPABILITY', '当前配音服务尚未接入完整音频合同，请在设置中选择已支持的豆包、MiniMax 或 MiMo。');
   if (result.tts?.provider === 'mimo' && !result.asr) {
     const asr = await resolveFrozen(state, ['asr'], options);
-    if (asr.asr.backend !== 'funasr') throw new ErrorType('MODEL_CAPABILITY', 'MiMo 不提供原生字幕，需要当前配置的 FunASR 句级转写；请先配置，应用不会自动更换模型。');
+    if (!['funasr', 'firered'].includes(asr.asr.backend)) throw new ErrorType('MODEL_CAPABILITY', 'MiMo 不提供原生字幕，需要当前配置的 FireRed 字词对齐或 FunASR 句级转写；请先配置，应用不会自动更换模型。');
     result.asr = asr.asr;
   }
   return result;
@@ -189,12 +190,14 @@ async function narration(record, chunk, config, attempt, options = {}) {
 async function transcribe(record, audioPath, durationMs, config, attempt, directory, options = {}) {
   const { observed, fetchImpl } = captureFetch(options);
   try {
-    const result = await context(record, attempt, options, () => (options.services?.transcribeFunasrAudio || transcribeFunasrAudio)(audioPath,
+    const result = await context(record, attempt, options, () => (options.services?.transcribeLocalAsrAudio || (config.backend === 'funasr' ? options.services?.transcribeFunasrAudio || transcribeFunasrAudio : transcribeLocalAsrAudio))(audioPath,
       {...config, language:record.illustrated.settings.narrationLanguage === 'zh-CN' ? 'zh' : 'en'},
       {...options.mediaOptions, durationMs, workDir:directory, fetchImpl}));
-    return {sentences:result.sentences, provider:result.provider, timingSource:result.timingSource, kind:'asr_sentences'};
+    return {sentences:result.sentences, words:result.words || [], provider:result.provider, timingSource:result.timingSource,
+      kind:result.provider === 'firered' ? 'asr_words' : 'asr_sentences'};
   } catch (error) {
-    if (/TIMESTAMPS|TEXT_MISMATCH/.test(error.code || '')) throw new ErrorType('NARRATION_EVIDENCE_INVALID', '转写没有提供有效句级时间点，音频已保留。');
+    if (/TIMESTAMPS|TEXT_MISMATCH|ALIGNMENT_FAILED/.test(error.code || '')) throw new ErrorType('NARRATION_EVIDENCE_INVALID', '转写没有提供有效的声学时间证据，音频已保留。');
+    if (error instanceof TranscriptionError) throw new ErrorType(error.code, error.message, error.status);
     throw classify(null, error.statusCode || observed.status, observed.sent, '转写服务');
   }
 }

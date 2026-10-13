@@ -108,7 +108,12 @@ async function proofreadTranscript(sentences, {
     model = result.model || model;
   }
   const replacements = new Map(changes.map(change => [change.index, change.after]));
-  return { sentences: sentences.map(cue => ({ ...cue, text: replacements.get(cue.index) ?? cue.text })), changes, model };
+  return { sentences: sentences.map(cue => {
+    if (!replacements.has(cue.index)) return { ...cue };
+    // 校订只修改文字，没有重新听音对齐；不能将原字词时间戳绑定到改后的字词。
+    const { words, ...sentence } = cue;
+    return { ...sentence, text: replacements.get(cue.index) };
+  }), changes, model };
 }
 
 module.exports = { formatTime, toSrt, validateChanges, proofreadTranscript };

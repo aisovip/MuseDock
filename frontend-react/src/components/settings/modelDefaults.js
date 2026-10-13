@@ -1,2 +1,2 @@
-export const BUILTIN_FUNASR_REF = 'builtin/funasr';
-export const DEFAULT_FUNASR_BASE_URL = 'http://127.0.0.1:8000/v1';
+export const BUILTIN_FIRERED_REF = 'builtin/firered';
+export const DEFAULT_FIRERED_BASE_URL = 'http://127.0.0.1:8001/v1';

@@ -6,8 +6,9 @@ const mediaPipeline = require('../mediaPipeline');
 const aiModelConfig = require('../ai/aiModelConfig');
 const { readAudioDuration } = require('../tts/ttsTimeline');
 const { normalizeCreativeInputWithDouyinShortLink } = require('../creative/creativeContext');
-const { TranscriptionError, transcriptionEndpoint, transcribeFunasrAudio } = require('./funasr');
+const { TranscriptionError, transcriptionEndpoint } = require('./funasr');
 const { ensureFunasrService } = require('./funasrRuntime');
+const { ensureLocalAsrService, transcribeLocalAsrAudio } = require('./localAsr');
 const { toSrt, proofreadTranscript } = require('./corrections');
 const { extractVideoFrames, MAX_FRAME_COUNT } = require('./videoFrames');
 const { DOUYIN_VIDEO_PAGE_MESSAGES } = require('../../scraper/douyinVideoPage');
@@ -233,8 +234,8 @@ function createTranscriptionService(options = {}) {
 
   async function configs(autoCorrect) {
     const asr = await (options.resolveAsrRuntime || mediaPipeline.resolveAsrRuntime)(options);
-    if (!asr.configured || asr.provider !== 'funasr') {
-      throw new TranscriptionError('ASR_NOT_CONFIGURED', '请在设置的“全局模型选择 → ASR 转写”中选择“FunASR（本地，默认）”，无需添加供应商或填写 API Key。');
+    if (!asr.configured || !['funasr', 'firered'].includes(asr.provider)) {
+      throw new TranscriptionError('ASR_NOT_CONFIGURED', '请在设置的“全局模型选择 → ASR 转写”中选择“FireRed（本地，默认）”，无需 API Key；也可选择已部署的 FunASR。');
     }
     transcriptionEndpoint(asr.baseUrl);
     const text = autoCorrect ? await (options.getTextConfig || aiModelConfig.getRuntimeConfig)('text', options) : null;
@@ -342,15 +343,16 @@ function createTranscriptionService(options = {}) {
           `转写结果已保存，抽帧未完成：${known ? error.message : '请检查视频文件、ffmpeg 配置与磁盘空间。'}`);
       }
     }
-    const message = job.autoCorrect ? `转写和校订完成，共校订 ${job.correctionCount} 条字幕。` : '转写完成，原始文本和字幕已保存。';
+    const message = job.result?.status === 'no_speech_detected' ? '未检测到可转写的人声，已保留音频与检测结果。'
+      : job.autoCorrect ? `转写和校订完成，共校订 ${job.correctionCount} 条字幕。` : '转写完成，原始文本和字幕已保存。';
     Object.assign(job, { status: 'succeeded', stage: 'done', progress: 100,
       message: `${message}${job.extractFrames ? ` 已保存 ${job.frames.length} 张截图。` : ''}` });
     await save(job);
   }
 
   async function run(job, runtime) {
-    await setStage(job, 'starting_asr', 2, '正在检查 FunASR 转写服务...');
-    await (options.ensureFunasrService || ensureFunasrService)(runtime.asr, {
+    await setStage(job, 'starting_asr', 2, '正在检查本地 ASR 转写服务...');
+    await (options.ensureLocalAsrService || (runtime.asr.provider === 'funasr' ? options.ensureFunasrService || ensureFunasrService : ensureLocalAsrService))(runtime.asr, {
       onProgress: ({ message }) => { job.message = message; },
     });
     await setStage(job, 'resolving', 5, '正在解析抖音链接...');
@@ -395,25 +397,36 @@ function createTranscriptionService(options = {}) {
     job.source.videoSha256 = await hashFile(media.video);
     await recordFile(job, 'audio', path.relative(directory(job.id), media.audio));
     job.source.audioSha256 = job.files.audio.sha256;
-    await setStage(job, 'transcribing', 45, '正在请求 FunASR 转写...');
-    const result = await (options.transcribeAudio || transcribeFunasrAudio)(media.audio, runtime.asr, {
+    await setStage(job, 'transcribing', 45, '正在请求本地 ASR 转写与时间对齐...');
+    const result = await (options.transcribeAudio || transcribeLocalAsrAudio)(media.audio, runtime.asr, {
       ...options, durationMs, workDir: path.join(directory(job.id), 'asr'),
       onProgress: ({ progress, message }) => { job.progress = 45 + Math.floor(progress * 0.3); job.message = message; },
     });
+    if (result.status === 'no_speech_detected') {
+      if (!result.success || result.text || result.sentences?.length || result.words?.length || result.missingRanges?.length) {
+        throw new TranscriptionError('ASR_INCOMPLETE', 'ASR 空人声状态与转写结果不一致，已停止交付。');
+      }
+      await writeArtifact(job, 'rawJson', 'transcript.raw.json', JSON.stringify(result, null, 2));
+      Object.assign(job, { result: { status: 'no_speech_detected', rawText: '', sentences: [], words: [], durationMs,
+          sentenceCount: 0, timingSource: result.timingSource, requestCount: result.requestCount } });
+      await save(job);
+      await finish(job);
+      return;
+    }
     if (!result.success || !result.sentences?.length || result.missingRanges?.length) {
-      throw new TranscriptionError('ASR_INCOMPLETE', 'FunASR 转写不完整，已保留媒体与各段响应，请检查服务。');
+      throw new TranscriptionError('ASR_INCOMPLETE', 'ASR 转写不完整，已保留媒体与各段响应，请检查服务。');
     }
     await setStage(job, 'saving', 76, '正在保存原始转写和字幕...');
     await writeArtifact(job, 'rawText', 'transcript.raw.txt', `${result.text}\n`);
     await writeArtifact(job, 'rawSrt', 'transcript.raw.srt', toSrt(result.sentences));
     await writeArtifact(job, 'rawJson', 'transcript.raw.json', JSON.stringify(result, null, 2));
     await writeArtifact(job, 'metadata', 'metadata.json', JSON.stringify({
-      source: job.source, model: { provider: 'funasr', modelId: runtime.asr.modelId },
+      source: job.source, model: { provider: result.provider, modelId: runtime.asr.modelId },
       extractFrames: job.extractFrames, frameCount: job.frameCount,
       durationMs, timingSource: result.timingSource, sentenceCount: result.sentences.length,
       requestCount: result.requestCount, missingRanges: result.missingRanges, files: job.files,
     }, null, 2));
-    job.result = { rawText: result.text, sentences: result.sentences, durationMs,
+    job.result = { rawText: result.text, sentences: result.sentences, words: result.words || [], durationMs,
       sentenceCount: result.sentences.length, timingSource: result.timingSource, requestCount: result.requestCount };
     await save(job);
     if (job.autoCorrect) await correct(job, runtime.text);
@@ -439,9 +452,9 @@ function createTranscriptionService(options = {}) {
     async capabilities() {
       const asr = await (options.resolveAsrRuntime || mediaPipeline.resolveAsrRuntime)(options);
       const text = await (options.getTextConfig || aiModelConfig.getRuntimeConfig)('text', options);
-      let asrReady = asr.configured && asr.provider === 'funasr';
+      let asrReady = asr.configured && ['funasr', 'firered'].includes(asr.provider);
       try { if (asrReady) transcriptionEndpoint(asr.baseUrl); } catch { asrReady = false; }
-      return { asrReady, asrModel: asrReady ? asr.modelId : '', textReady: textConfigured(text), textModel: textConfigured(text) ? text.modelId : '' };
+      return { asrReady, asrProvider: asrReady ? asr.provider : '', asrModel: asrReady ? asr.modelId : '', textReady: textConfigured(text), textModel: textConfigured(text) ? text.modelId : '' };
     },
     async create({ source, autoCorrect = false, extractFrames = false, frameCount } = {}) {
       if (typeof source !== 'string' || !source.trim() || source.length > 4096 || typeof autoCorrect !== 'boolean') {

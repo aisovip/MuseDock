@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button.jsx';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog.jsx';
 import { Input } from '@/components/ui/input.jsx';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.jsx';
-import { BUILTIN_FUNASR_REF, DEFAULT_FUNASR_BASE_URL } from './modelDefaults.js';
+import { BUILTIN_FIRERED_REF, DEFAULT_FIRERED_BASE_URL } from './modelDefaults.js';
 
 const MODEL_SELECTOR_HELP_TEXT = {
   image: '当前图片生成仅支持火山方舟 Seedream 4.0-5.0 以及 OpenAI gpt-image-2。',
@@ -11,13 +11,13 @@ const MODEL_SELECTOR_HELP_TEXT = {
 };
 
 export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, activeModels, onChange,
-  localAsr, onLocalAsrBaseUrlChange, onLocalAsrPythonPathChange, onLocalAsrModelCacheChange, disabled = false }) {
+  localFireRed, onLocalFireRedBaseUrlChange, onLocalFireRedPythonPathChange, onLocalFireRedModelCacheChange, disabled = false }) {
   return (
     <section className="mb-4 rounded-lg border border-[#e7e9ee] bg-white p-4">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h3 className="m-0 text-lg font-bold">全局模型选择</h3>
-          <p className="mt-1 text-[13px] text-[#69717e]">为每种功能选择本地模型或供应商模型。ASR 默认使用本地 FunASR。</p>
+          <p className="mt-1 text-[13px] text-[#69717e]">为每种功能选择本地模型或供应商模型。ASR 默认使用本地 FireRed。</p>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 max-[900px]:grid-cols-1">
@@ -35,7 +35,7 @@ export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, a
                 }}>
                   <SelectTrigger id={`global-model-${type}`} className="h-[38px] bg-white"><SelectValue placeholder="选择 ASR 转写模型" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={BUILTIN_FUNASR_REF}>FunASR（本地，默认）</SelectItem>
+                    <SelectItem value={BUILTIN_FIRERED_REF}>FireRed（本地，默认）</SelectItem>
                     {providerList.map(p => {
                       const model = p.models[type];
                       return <SelectItem key={p.id} value={`${p.id}/${type}`} disabled={!model?.enabled || !model?.modelId}>
@@ -67,9 +67,9 @@ export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, a
                   );
                 })}
               </select>}
-              {type === 'asr' && value === BUILTIN_FUNASR_REF ? (
+              {type === 'asr' && value === BUILTIN_FIRERED_REF ? (
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs leading-5 text-[#69717e]">本地 Paraformer 转写，无需 API Key。</span>
+                  <span className="text-xs leading-5 text-[#69717e]">FireRed 识别与字词声学对齐，无需 API Key。</span>
                   <Dialog>
                     <DialogTrigger asChild>
                       <Button variant="outline" size="sm" disabled={disabled}>
@@ -78,30 +78,30 @@ export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, a
                     </DialogTrigger>
                     <DialogContent className="max-h-[85vh] overflow-y-auto">
                       <DialogHeader>
-                        <DialogTitle>FunASR 本地服务设置</DialogTitle>
+                        <DialogTitle>FireRed 本地服务设置</DialogTitle>
                         <DialogDescription>按需调整服务参数。修改后请点击页面上方的“保存模型配置”。</DialogDescription>
                       </DialogHeader>
                       <div className="grid gap-4">
                         <div className="grid gap-1.5">
-                          <label className="text-sm font-medium" htmlFor="local-funasr-base-url">FunASR 服务地址</label>
-                          <Input id="local-funasr-base-url" type="url" value={localAsr?.baseUrl ?? DEFAULT_FUNASR_BASE_URL}
-                            placeholder={DEFAULT_FUNASR_BASE_URL} disabled={disabled}
-                            onChange={event => onLocalAsrBaseUrlChange?.(event.target.value)} />
+                          <label className="text-sm font-medium" htmlFor="local-firered-base-url">FireRed 服务地址</label>
+                          <Input id="local-firered-base-url" type="url" value={localFireRed?.baseUrl ?? DEFAULT_FIRERED_BASE_URL}
+                            placeholder={DEFAULT_FIRERED_BASE_URL} disabled={disabled}
+                            onChange={event => onLocalFireRedBaseUrlChange?.(event.target.value)} />
                           <p className="m-0 text-xs leading-5 text-muted-foreground">开始抖音转写时会检查服务，本机服务未运行则自动启动并等待模型就绪。</p>
                         </div>
                         <div className="grid gap-1.5">
-                          <label className="text-sm font-medium" htmlFor="local-funasr-python-path">FunASR Python 路径（可选）</label>
-                          <Input id="local-funasr-python-path" value={localAsr?.pythonPath || ''}
+                          <label className="text-sm font-medium" htmlFor="local-firered-python-path">FireRed Python 路径（可选）</label>
+                          <Input id="local-firered-python-path" value={localFireRed?.pythonPath || ''}
                             placeholder="留空自动查找，或填写已有环境的 Python 路径" disabled={disabled}
-                            onChange={event => onLocalAsrPythonPathChange?.(event.target.value)} />
-                          <p className="m-0 text-xs leading-5 text-muted-foreground">需先安装 FunASR 依赖；已有独立环境时填写其中的 python.exe，保存后重启电脑也无需手动启动服务。</p>
+                            onChange={event => onLocalFireRedPythonPathChange?.(event.target.value)} />
+                          <p className="m-0 text-xs leading-5 text-muted-foreground">首次先运行 npm run setup:asr 安装独立 Python 环境与模型；Python 需为 3.11 或 3.12。已有环境可填写解释器路径。</p>
                         </div>
                         <div className="grid gap-1.5">
-                          <label className="text-sm font-medium" htmlFor="local-funasr-model-cache">FunASR 模型缓存目录（可选）</label>
-                          <Input id="local-funasr-model-cache" value={localAsr?.modelCache || ''}
+                          <label className="text-sm font-medium" htmlFor="local-firered-model-cache">FireRed 模型缓存目录（可选）</label>
+                          <Input id="local-firered-model-cache" value={localFireRed?.modelCache || ''}
                             placeholder="已有模型时填写缓存目录，避免重新下载" disabled={disabled}
-                            onChange={event => onLocalAsrModelCacheChange?.(event.target.value)} />
-                          <p className="m-0 text-xs leading-5 text-muted-foreground">留空使用 ModelScope 默认缓存；远程地址及供应商服务由其部署环境负责启动。</p>
+                            onChange={event => onLocalFireRedModelCacheChange?.(event.target.value)} />
+                          <p className="m-0 text-xs leading-5 text-muted-foreground">留空使用 MuseDock 数据目录中的 data/models/firered；自定义目录须用 setup:asr 的 --model-cache 参数安装模型。</p>
                         </div>
                       </div>
                       <DialogFooter>

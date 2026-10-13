@@ -84,6 +84,12 @@ async function run() {
     assert.deepEqual(correction.sentences.map(({ index, startMs, endMs }) => [index, startMs, endMs]), cues.map(({ index, startMs, endMs }) => [index, startMs, endMs]));
     assert.equal(cues[0].text, '回到故乡。');
     assert.equal(correction.sentences[0].text, '回到家乡。');
+    const withWords = await proofreadTranscript([{ ...cues[0], words: [{ text: '原文', startMs: 2120, endMs: 2700 }] }], {
+      callModel: async () => ({ success: true, text: JSON.stringify({ changes: [
+        { index: 1, type: 'wrong-word', text: '回到家乡。', reason: '测试上下文' },
+      ] }) }),
+    });
+    assert.equal(withWords.sentences[0].words, undefined, '校订后的字词不能继续绑定原文字的时间证据');
 
     const configPath = path.join(root, 'ai-models.json');
     const builtinConfig = await aiModelConfig.getRuntimeConfig('asr', { configPath });
@@ -94,9 +100,9 @@ async function run() {
       ASR_BASE_URL: 'https://example.invalid/v1', ASR_MODEL: 'cloud-model',
     } });
     assert.equal(builtinRuntime.configured, true);
-    assert.equal(builtinRuntime.provider, 'funasr');
-    assert.equal(builtinRuntime.modelId, 'paraformer');
-    assert.equal(builtinRuntime.baseUrl, 'http://127.0.0.1:8000/v1');
+    assert.equal(builtinRuntime.provider, 'firered');
+    assert.equal(builtinRuntime.modelId, 'fireredasr2-aed');
+    assert.equal(builtinRuntime.baseUrl, 'http://127.0.0.1:8001/v1');
     assert.equal(builtinRuntime.apiKey, '');
     const localPaths = await mediaPipeline.resolveAsrRuntime({ asrConfig: {
       ...builtinConfig, pythonPath: 'local-python', modelCache: 'local-cache',
@@ -104,7 +110,7 @@ async function run() {
     assert.equal(localPaths.pythonPath, 'local-python');
     assert.equal(localPaths.modelCache, 'local-cache');
     const environmentPaths = await mediaPipeline.resolveAsrRuntime({ asrConfig: builtinConfig,
-      env: { FUNASR_PYTHON: 'override-python', MODELSCOPE_CACHE: 'override-cache' } });
+      env: { FIRERED_PYTHON: 'override-python', FIRERED_MODEL_CACHE: 'override-cache' } });
     assert.equal(environmentPaths.pythonPath, 'override-python');
     assert.equal(environmentPaths.modelCache, 'override-cache');
     const explicitMimo = await mediaPipeline.resolveAsrRuntime({ asrConfig: builtinConfig, env: {

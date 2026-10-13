@@ -40,7 +40,8 @@ async function narration(ctx) {
   }
   const frozen=await models.resolveFrozen(s,['tts'],ctx.options);
   if (frozen.asr) {
-    await (ctx.options.services?.ensureFunasrService || require('../../transcription/funasrRuntime').ensureFunasrService)(frozen.asr, {
+    await (ctx.options.services?.ensureLocalAsrService || (frozen.asr.backend === 'funasr' && ctx.options.services?.ensureFunasrService)
+      || require('../../transcription/localAsr').ensureLocalAsrService)(frozen.asr, {
       onProgress:({message})=>ctx.progress(message),
     });
   }

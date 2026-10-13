@@ -101,6 +101,7 @@ function httpError(status) {
 }
 
 async function transcribeFunasrAudio(audioPath, config, options = {}) {
+  const label = options.serviceLabel || 'FunASR';
   const endpoint = transcriptionEndpoint(config.baseUrl);
   const probe = options.durationMs ? { success: true, duration: options.durationMs / 1000 }
     : await (options.readAudioDuration || readAudioDuration)(audioPath, options);
@@ -109,7 +110,7 @@ async function transcribeFunasrAudio(audioPath, config, options = {}) {
   }
   const durationMs = Math.round(probe.duration * 1000);
   const report = options.onProgress || (() => {});
-  await report({ progress: 5, message: '正在准备 FunASR 音频...' });
+  await report({ progress: 5, message: `正在准备 ${label} 音频...` });
   const requests = await prepareRequests(audioPath, durationMs, options);
   const sentences = [];
   const responses = [];
@@ -121,6 +122,7 @@ async function transcribeFunasrAudio(audioPath, config, options = {}) {
     body.set('model', config.modelId || 'paraformer');
     body.set('response_format', 'verbose_json');
     body.append('timestamp_granularities[]', 'segment');
+    if (options.normalizePayload) body.append('timestamp_granularities[]', 'word');
     if (config.language && config.language !== 'auto') body.set('language', config.language);
     let response;
     let payload;
@@ -130,28 +132,35 @@ async function transcribeFunasrAudio(audioPath, config, options = {}) {
         headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
         signal: AbortSignal.timeout(options.requestTimeoutMs || 300000),
       });
-      if (!response.ok) throw httpError(response.status);
+      if (!response.ok) {
+        if (options.normalizePayload && response.status === 422) {
+          throw new TranscriptionError('ASR_ALIGNMENT_FAILED', 'FireRed 声学对齐失败，无法交付字词时间戳；请保留音频并检查识别结果。', 422);
+        }
+        const failure = httpError(response.status);
+        failure.message = failure.message.replaceAll('FunASR', label);
+        throw failure;
+      }
       payload = await response.json();
     } catch (error) {
       if (error instanceof TranscriptionError) throw error;
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
-        throw new TranscriptionError('ASR_TIMEOUT', 'FunASR 请求超时，请检查服务状态；已保存的媒体和转写片段仍保留。', 504);
+        throw new TranscriptionError('ASR_TIMEOUT', `${label} 请求超时，请检查服务状态；已保存的媒体和转写片段仍保留。`, 504);
       }
-      throw new TranscriptionError('ASR_UNAVAILABLE', '无法连接 FunASR 或响应不是有效 JSON，请检查服务地址和运行状态后重新开始转写。', 503);
+      throw new TranscriptionError('ASR_UNAVAILABLE', `无法连接 ${label} 或响应不是有效 JSON，请检查服务地址和运行状态后重新开始转写。`, 503);
     }
     const evidence = { index: index + 1, offsetMs: segment.offsetMs, durationMs: segment.durationMs,
       response: sanitizeResponse(payload, config.apiKey) };
     // 每段响应先落盘；后续段失败也不会丢失已收到的证据。
     await fsp.writeFile(path.join(path.dirname(segment.path), `response-${index + 1}.json`), JSON.stringify(evidence, null, 2), 'utf8');
     responses.push(evidence);
-    const cues = normalizeSentences(payload, segment.durationMs, segment.offsetMs);
-    if (sentences.length && cues[0].startMs < sentences[sentences.length - 1].endMs) {
+    const cues = (options.normalizePayload || normalizeSentences)(payload, segment.durationMs, segment.offsetMs);
+    if (sentences.length && cues.length && cues[0].startMs < sentences[sentences.length - 1].endMs) {
       throw new TranscriptionError('ASR_TIMESTAMPS_INVALID', 'FunASR 返回的相邻音频片段字幕重叠，已保留原始响应，请检查服务时间戳。');
     }
     for (const cue of cues) sentences.push({ ...cue, index: sentences.length + 1 });
   }
   return {
-    success: true, status: 'done', provider: 'funasr', model: config.modelId || 'paraformer',
+    success: true, status: sentences.length ? 'done' : 'no_speech_detected', provider: options.provider || 'funasr', model: config.modelId || 'paraformer',
     text: responses.map(item => item.response.text || '').filter(Boolean).join('\n') || sentences.map(cue => cue.text).join('\n'),
     sentences, durationMs, requestCount: requests.length, missingRanges: [],
     timingSource: responses.every(item => item.response.timing_source === 'funasr_sentence_info' || Array.isArray(item.response.sentence_info))

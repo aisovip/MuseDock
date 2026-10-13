@@ -140,8 +140,19 @@ async function resolveAsrRuntime(options = {}) {
     configPath: options.configPath,
   });
   const explicitProvider = normalizeProvider(env.ASR_PROVIDER);
-  const storedConfig = selectedConfig?.builtin && explicitProvider && explicitProvider !== 'funasr'
+  const storedConfig = selectedConfig?.builtin && explicitProvider && explicitProvider !== selectedConfig.backend
     ? null : selectedConfig;
+  const storedFireRed = storedConfig?.enabled && storedConfig.backend === 'firered' ? storedConfig : null;
+  if (explicitProvider === 'firered' || (!explicitProvider && storedFireRed)) {
+    const builtin = !!storedFireRed?.builtin && !explicitProvider;
+    const baseUrl = env.FIRERED_BASE_URL || (builtin ? storedFireRed.baseUrl : env.ASR_BASE_URL || storedFireRed?.baseUrl || '');
+    return { configured: !!baseUrl, provider: 'firered', backend: 'firered', builtin,
+      baseUrl, pythonPath: env.FIRERED_PYTHON || storedFireRed?.pythonPath || '',
+      modelCache: env.FIRERED_MODEL_CACHE || storedFireRed?.modelCache || '',
+      apiKey: builtin ? '' : env.FIRERED_API_KEY || env.ASR_API_KEY || storedFireRed?.apiKey || '',
+      modelId: builtin ? 'fireredasr2-aed' : env.ASR_MODEL || storedFireRed?.modelId || 'fireredasr2-aed',
+      language: env.ASR_LANGUAGE || 'auto' };
+  }
   if (storedConfig?.builtin && storedConfig.backend === 'funasr' && !env.ASR_PROVIDER) {
     return {
       configured: true, provider: 'funasr', builtin: true,
@@ -898,17 +909,19 @@ async function transcribeAudio(awemeId, options = {}) {
     return result;
   }
 
-  if (asrConfig.provider === 'funasr') {
-    const { transcribeFunasrAudio, TranscriptionError } = require('./transcription/funasr');
+  if (['funasr', 'firered'].includes(asrConfig.provider)) {
+    const { TranscriptionError } = require('./transcription/funasr');
+    const { ensureLocalAsrService, transcribeLocalAsrAudio } = require('./transcription/localAsr');
     let providerResult;
     try {
-      providerResult = await transcribeFunasrAudio(paths.audio, asrConfig, options);
+      await ensureLocalAsrService(asrConfig, options);
+      providerResult = await transcribeLocalAsrAudio(paths.audio, asrConfig, options);
     } catch (error) {
       providerResult = { success: false, status: 'failed',
         code: error instanceof TranscriptionError ? error.code : 'ASR_FAILED',
-        message: error instanceof TranscriptionError ? error.message : 'FunASR 转写失败，请检查服务与音频文件。' };
+        message: error instanceof TranscriptionError ? error.message : '本地 ASR 转写失败，请检查服务与音频文件。' };
     }
-    const result = { ...providerResult, configured: true, provider: 'funasr', model: asrConfig.modelId,
+    const result = { ...providerResult, configured: true, provider: asrConfig.provider, model: asrConfig.modelId,
       aweme_id: String(awemeId), transcript_path: paths.transcript };
     await writeJson(paths.transcript, { ...result, audio_path: paths.audio, updated_at: new Date().toISOString() });
     await updateAnalysisInputTranscript(paths, result);
@@ -945,7 +958,7 @@ async function transcribeAudio(awemeId, options = {}) {
     configured: true,
     status: 'provider_not_implemented',
     aweme_id: String(awemeId),
-    message: '当前 ASR 接口不受支持，请在设置中选择 MiMo ASR 或 FunASR。',
+    message: '当前 ASR 接口不受支持，请在设置中选择 FireRed、MiMo ASR 或 FunASR。',
     transcript_path: paths.transcript,
   };
   await writeJson(paths.transcript, {

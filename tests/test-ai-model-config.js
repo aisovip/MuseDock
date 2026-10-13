@@ -10,17 +10,17 @@ async function run() {
 
   // Test 1: empty config returns default structure
   const initial = await aiModelConfig.getPublicConfig({ configPath });
-  assert.deepStrictEqual(Object.keys(initial), ['providers', 'active', 'skipValidation', 'localAsr']);
+  assert.deepStrictEqual(Object.keys(initial), ['providers', 'active', 'skipValidation', 'localAsr', 'localFireRed']);
   assert.deepStrictEqual(initial.providers, {});
   assert.strictEqual(initial.skipValidation, false);
   for (const type of aiModelConfig.MODEL_TYPES) {
-    assert.strictEqual(initial.active[type], type === 'asr' ? aiModelConfig.BUILTIN_FUNASR_REF : '');
+    assert.strictEqual(initial.active[type], type === 'asr' ? aiModelConfig.BUILTIN_FIRERED_REF : '');
   }
   assert.deepStrictEqual(initial.localAsr, { baseUrl: 'http://127.0.0.1:8000/v1', pythonPath: '', modelCache: '' });
   const defaultAsr = await aiModelConfig.getRuntimeConfig('asr', { configPath });
   assert.strictEqual(defaultAsr.builtin, true);
-  assert.strictEqual(defaultAsr.provider, 'funasr');
-  assert.strictEqual(defaultAsr.modelId, 'paraformer');
+  assert.strictEqual(defaultAsr.provider, 'firered');
+  assert.strictEqual(defaultAsr.modelId, 'fireredasr2-aed');
   assert.strictEqual(defaultAsr.apiKey, '');
 
   // Test 2: save new multi-provider config
@@ -163,26 +163,26 @@ async function run() {
   // 内置 ASR 独立于供应商保存；旧客户端省略本地地址时也应保留已保存的地址。
   const builtinConfigPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'builtin-asr-config-')), 'ai-models.json');
   const builtinSaved = await aiModelConfig.saveConfig({
-    providers: {}, active: { asr: aiModelConfig.BUILTIN_FUNASR_REF },
-    localAsr: { baseUrl: 'http://127.0.0.1:18000/v1/', pythonPath: '  C:/FunASR 环境/python.exe  ', modelCache: ' C:/FunASR 模型 ' },
+    providers: {}, active: { asr: aiModelConfig.BUILTIN_FIRERED_REF },
+    localFireRed: { baseUrl: 'http://127.0.0.1:18000/v1/', pythonPath: '  C:/FunASR 环境/python.exe  ', modelCache: ' C:/FunASR 模型 ' },
   }, { configPath: builtinConfigPath });
   assert.deepStrictEqual(builtinSaved.providers, {});
-  assert.strictEqual(builtinSaved.localAsr.baseUrl, 'http://127.0.0.1:18000/v1');
-  assert.strictEqual(builtinSaved.localAsr.pythonPath, 'C:/FunASR 环境/python.exe');
-  assert.strictEqual(builtinSaved.localAsr.modelCache, 'C:/FunASR 模型');
+  assert.strictEqual(builtinSaved.localFireRed.baseUrl, 'http://127.0.0.1:18000/v1');
+  assert.strictEqual(builtinSaved.localFireRed.pythonPath, 'C:/FunASR 环境/python.exe');
+  assert.strictEqual(builtinSaved.localFireRed.modelCache, 'C:/FunASR 模型');
   await aiModelConfig.saveConfig({ providers: {}, active: {} }, { configPath: builtinConfigPath });
   const rereadAsr = await aiModelConfig.getRuntimeConfig('asr', { configPath: builtinConfigPath });
   assert.strictEqual(rereadAsr.builtin, true);
   assert.strictEqual(rereadAsr.baseUrl, 'http://127.0.0.1:18000/v1');
   assert.strictEqual(rereadAsr.apiKey, '');
-  assert.strictEqual(rereadAsr.pythonPath, builtinSaved.localAsr.pythonPath);
-  assert.strictEqual(rereadAsr.modelCache, builtinSaved.localAsr.modelCache);
+  assert.strictEqual(rereadAsr.pythonPath, builtinSaved.localFireRed.pythonPath);
+  assert.strictEqual(rereadAsr.modelCache, builtinSaved.localFireRed.modelCache);
   // 旧客户端只提交地址时保留启动环境，显式空字符串则可以清除。
-  const legacySaved = await aiModelConfig.saveConfig({ providers: {}, localAsr: { baseUrl: rereadAsr.baseUrl } }, { configPath: builtinConfigPath });
-  assert.deepStrictEqual(legacySaved.localAsr, builtinSaved.localAsr);
-  const cleared = await aiModelConfig.saveConfig({ providers: {}, localAsr: { baseUrl: rereadAsr.baseUrl, pythonPath: '', modelCache: '' } }, { configPath: builtinConfigPath });
-  assert.strictEqual(cleared.localAsr.pythonPath, '');
-  assert.strictEqual(cleared.localAsr.modelCache, '');
+  const legacySaved = await aiModelConfig.saveConfig({ providers: {}, localFireRed: { baseUrl: rereadAsr.baseUrl } }, { configPath: builtinConfigPath });
+  assert.deepStrictEqual(legacySaved.localFireRed, builtinSaved.localFireRed);
+  const cleared = await aiModelConfig.saveConfig({ providers: {}, localFireRed: { baseUrl: rereadAsr.baseUrl, pythonPath: '', modelCache: '' } }, { configPath: builtinConfigPath });
+  assert.strictEqual(cleared.localFireRed.pythonPath, '');
+  assert.strictEqual(cleared.localFireRed.modelCache, '');
 }
 
 run().then(() => {
