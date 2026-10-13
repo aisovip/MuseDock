@@ -1,4 +1,5 @@
 const fsp = require('fs/promises');
+const { beginDelete } = require('../diagnostics/taskDiagnosticLocks');
 const path = require('path');
 const { HYPERFRAMES_MODE, WHITEBOARD_MODE, MODES, getCreationMode, createModeSnapshot, readModeSnapshot } = require('./creationModes');
 const whiteboardWorkflows = require('./whiteboard/whiteboardWorkflows');
@@ -1489,7 +1490,10 @@ async function deleteCreativeWorkflow(workflowId, options = {}) {
   const workflowPath = getWorkflowPath(id, rootDir);
   const mediaDir = path.resolve(mediaRoot, id);
   if (!isPathInside(mediaDir, mediaRoot)) return { success: false, workflow_id: id, message: '创作任务媒体路径越界。' };
-  return withWorkflowFileQueue(workflowPath, () => deleteCreativeWorkflowUnlocked(id, rootDir, workflowPath, mediaDir));
+  const release = beginDelete(rootDir, id);
+  if (!release) return { success: false, statusCode: 409, workflow_id: id, message: '任务资料正在打包或清理，请等待结束后再删除。' };
+  try { return await withWorkflowFileQueue(workflowPath, () => deleteCreativeWorkflowUnlocked(id, rootDir, workflowPath, mediaDir)); }
+  finally { release(); }
 }
 
 async function deleteCreativeWorkflowUnlocked(id, rootDir, workflowPath, mediaDir) {
@@ -1514,6 +1518,7 @@ async function deleteCreativeWorkflowUnlocked(id, rootDir, workflowPath, mediaDi
     await fsp.rm(illustratedDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 });
     await fsp.rm(getArtifactRoot(id, rootDir), { recursive: true, force: true });
     await fsp.rm(workDirectory, { recursive: true, force: true, maxRetries: 8, retryDelay: 300 });
+    await fsp.rm(path.join(rootDir, '.task-diagnostics', id), { recursive: true, force: true });
     deleted.media = true;
   } catch (error) {
     if (error?.code !== 'ENOENT') {

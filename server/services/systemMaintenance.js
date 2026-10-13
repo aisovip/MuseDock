@@ -1,6 +1,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const { beginCleanup } = require('./diagnostics/taskDiagnosticLocks');
 
 const defaultEnvironmentDoctor = require('./creative-video/html-video/environmentDoctor');
 const defaultAiModelConfig = require('./ai/aiModelConfig');
@@ -456,6 +457,9 @@ async function cleanupTargets(options = {}) {
   }
 
   const hasBlockedTarget = targets.some(target => CREATIVE_TASK_BLOCKED_TARGETS.has(target));
+  const release = hasBlockedTarget ? beginCleanup() : () => {};
+  if (!release) return { ...result, success: false, message: '任务资料正在打包、删除或清理，请等待结束后再清理相关数据。' };
+  try {
   if (hasBlockedTarget) {
     const checker = typeof options.hasRunningCreativeTasks === 'function'
       ? options.hasRunningCreativeTasks
@@ -494,6 +498,7 @@ async function cleanupTargets(options = {}) {
 
   result.message = cleanupMessage(result);
   return result;
+  } finally { release(); }
 }
 
 async function getStorageOverview(options = {}) {

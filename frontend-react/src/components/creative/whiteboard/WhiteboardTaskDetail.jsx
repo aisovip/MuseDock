@@ -21,6 +21,7 @@ import { WhiteboardMediaPanel } from './WhiteboardMediaPanel.jsx';
 import { WhiteboardCoverageReview } from './WhiteboardCoverageReview.jsx';
 import { whiteboardCanvasLabel, validateSubtitleSettings } from './whiteboardForm.js';
 import { ApiCallLogLink } from '@/components/diagnostics/ApiCallLogLink.jsx';
+import { TaskBundleButton } from '@/components/diagnostics/TaskBundleButton.jsx';
 import { QuestionOpeningFields } from '../shared/QuestionOpeningFields.jsx';
 import { openingFormValue, validateOpening } from '../shared/openingForm.js';
 
@@ -202,6 +203,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ApiCallLogLink workflowId={workflow.workflow_id} />
+          <TaskBundleButton workflowId={workflow.workflow_id} />
           <span className={cn('rounded-full border px-2.5 py-1 text-xs font-semibold', workflow.status === 'phase0_complete' ? 'border-success/30 text-success' : ['failed', 'unknown_external_outcome'].includes(workflow.status) ? 'border-danger/25 text-danger' : 'border-line-2 text-fg-2')}>{STATUS_TEXT[workflow.status] || '处理中'}</span>
           <Button variant="ghost" size="icon" type="button" aria-label="停止并删除白板任务" className="max-[760px]:min-w-11" disabled={Boolean(deletingWorkflowId) || Boolean(busy)} onClick={() => onStopAndDelete(workflow.workflow_id)}><Trash2 size={16} /></Button>
         </div>

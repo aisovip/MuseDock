@@ -14,6 +14,7 @@ const { ensureWhiteboardConcurrency } = require('./concurrency');
 const { recoverableAnnotationAttempts, recoverAnnotationPreviews } = require('./annotationRecovery');
 const { safeVisionDiagnostics } = require('./visionDiagnostics');
 const { scenePrompt, validatePrompt } = require('./lineartPrompts');
+const { recordRun, recordFailure, failureDetails } = require('../../diagnostics/taskDiagnosticRecords');
 
 const COVERAGE_GATE = 'annotation_coverage_review';
 
@@ -381,6 +382,7 @@ function fail(record, error, now) {
   const media = record.whiteboard.media;
   const unknown = error.code === 'UNKNOWN_EXTERNAL_OUTCOME';
   const diagnosticFields = {
+    failure_details: failureDetails(error),
     ...(error.diagnostics ? { diagnostics: safeVisionDiagnostics(error.diagnostics) } : {}),
     ...(typeof error.evidenceCode === 'string' && /^[a-z_]{1,80}$/.test(error.evidenceCode) ? { evidenceCode: error.evidenceCode } : {}),
   };
@@ -434,6 +436,7 @@ async function run(workflowId, options, hooks) {
       setState(record, 'running', record.message, now);
     });
     claimed = true;
+    await recordRun(workflowId, { execution_id: executionId, mode: 'whiteboard-stream-v1' }, rootDir);
     watchdog = setInterval(async () => { if (!await workflowFileExists(workflowId, rootDir)) controller.abort(); }, 2000);
     heartbeat = setInterval(async () => {
       try {
@@ -535,6 +538,7 @@ async function run(workflowId, options, hooks) {
     return { success: true, ...await getView(finished.record, options) };
   } catch (error) {
     if (error.code === 'ENOENT' || !await workflowFileExists(workflowId, rootDir)) return { success: false, workflow_id: workflowId, status: 'deleted', message: '制作任务已停止并删除。' };
+    await recordFailure(workflowId, error, { execution_id: executionId, mode: 'whiteboard-stream-v1' }, rootDir);
     const safe = error instanceof WhiteboardError ? error : new WhiteboardError('MEDIA_FAILED', '媒体处理失败，请检查本地运行环境与当前产物后重试。');
     if (claimed) {
       try {

@@ -17,6 +17,7 @@ import { buildWorkflowErrorLog } from './creativeErrorLog.js';
 import { CreativeTitlePanel } from './CreativeTitlePanel.jsx';
 import { SourceImageAssetsPanel } from './SourceImageAssetsPanel.jsx';
 import { ApiCallLogLink } from '@/components/diagnostics/ApiCallLogLink.jsx';
+import { TaskBundleButton } from '@/components/diagnostics/TaskBundleButton.jsx';
 
 const STATUS_CHIP_CLASS = {
   done: 'bg-green-50 text-green-700 ring-green-200',
@@ -94,6 +95,7 @@ export function CreativeTaskSummary({
         </div>
         <div className="inline-flex shrink-0 flex-wrap items-center justify-end gap-2 max-[720px]:justify-start">
           {editableWorkflowId ? <ApiCallLogLink workflowId={editableWorkflowId} /> : null}
+          <TaskBundleButton workflowId={editableWorkflowId} />
           {durationLabel ? (
             <span className="rounded-full bg-[#f8fafc] px-3 py-1 text-xs font-bold text-[#4b5563] ring-1 ring-[#e7e9ee]">
               {durationLabel}

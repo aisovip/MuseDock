@@ -12,6 +12,7 @@ const {
 } = require('../services/creative/creativeWorkflowDto');
 
 const router = express.Router();
+router.use('/:workflow_id/diagnostic-bundles', require('./taskDiagnosticBundles'));
 const WORKFLOW_ID_PATTERN = /^\d{5,32}$/;
 const DEFAULT_UPLOAD_TIMEOUT_MS = 30 * 1000;
 
@@ -1407,7 +1408,7 @@ router.delete('/:workflow_id', async (req, res) => {
   try {
     const service = getService(req);
     const result = await service.deleteCreativeWorkflow(workflowId);
-    const statusCode = result.success ? 200 : 404;
+    const statusCode = result.success ? 200 : (result.statusCode || 404);
     return res.status(statusCode).json({
       workflow_id: workflowId,
       ...result,

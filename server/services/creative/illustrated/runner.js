@@ -5,6 +5,7 @@ const store=require('./storage');
 const state=require('./state');
 const {ErrorType}=require('./contracts');
 const jobs=require('./jobs');
+const {recordRun,recordFailure}=require('../../diagnostics/taskDiagnosticRecords');
 
 class Cancelled extends Error {}
 async function run(workflowId,options={}) {
@@ -22,6 +23,7 @@ async function run(workflowId,options={}) {
     op.status='running';op.startedAt=new Date().toISOString();state.refresh(latest);
   });
   const directory=path.join(store.mediaRoot(workflowId,options.rootDir),'work',operationId);
+  await recordRun(workflowId,{operation_id:operationId,mode:'illustrated-narration-v1'},options.rootDir);
   const context={
     options,directory,workflowId,update,
     read:()=>store.readWorkflow(workflowId,options.rootDir),
@@ -108,6 +110,7 @@ async function run(workflowId,options={}) {
       return { success:false, workflow_id:workflowId, status:'deleted', message:'任务已删除，晚到结果不会重建任务。' };
     }
     const cancelled=error instanceof Cancelled || error.code==='CANCELLED';
+    if(!cancelled) await recordFailure(workflowId,error,{operation_id:operationId,stage:record.current_stage},options.rootDir);
     record=await update(current=>{
       const op=current.illustrated.operation;op.status=cancelled?'cancelled':'failed';op.finishedAt=new Date().toISOString();
       if(cancelled) {

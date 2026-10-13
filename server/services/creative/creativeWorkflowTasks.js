@@ -1,6 +1,7 @@
 const defaultCreativeWorkflows = require('./creativeWorkflows');
 const { defaultRegistry } = require('./creativeTaskRegistry');
 const { runWithApiCallContext } = require('../diagnostics/apiCallRecorder');
+const { recordEvent, recordRun, recordFailure } = require('../diagnostics/taskDiagnosticRecords');
 const { calculateProjectProgress, calculateWorkflowProgress, isTerminalEvent } = require('./creativeTaskEvents');
 
 function createOperationId(workflowId) {
@@ -174,6 +175,9 @@ async function patchTerminalTaskSummaryOrThrow(options = {}) {
   if (!persisted?.success) {
     throw new Error(persisted?.message || '更新创作任务终态失败。');
   }
+  await recordEvent(options.workflowId, { type: options.patch?.task_status === 'failed' ? 'task_failed' : 'task_done',
+    task_id: options.taskId, operation_id: options.operationId, seq: options.failedEventSeq,
+    message: options.patch?.message, data: { status: options.patch?.status } }, options.rootDir);
   return persisted;
 }
 
@@ -250,6 +254,7 @@ async function emitAndPersistTaskEvent({
     patch,
     failedEventSeq: emitted.seq,
   });
+  await recordEvent(workflowId, emitted, rootDir);
 
   return emitted;
 }
@@ -287,11 +292,13 @@ async function startCreativeWorkflowTask(workflowId, options = {}) {
     last_event_seq: 0,
   }, { rootDir });
 
-  registry.emit(taskId, {
+  await recordRun(workflowId, { task_id: taskId, operation_id: operationId }, rootDir);
+  const startedEvent = registry.emit(taskId, {
     type: 'task_started',
     progress: 0,
     message: '后台创作任务已启动。',
   });
+  if (startedEvent) await recordEvent(workflowId, startedEvent, rootDir);
 
   async function runBackgroundTask() {
     const pendingEventWrites = new Set();
@@ -378,6 +385,7 @@ async function startCreativeWorkflowTask(workflowId, options = {}) {
       }));
     } catch (error) {
       const message = error.message || '创作任务执行失败。';
+      await recordFailure(workflowId, error, { task_id: taskId, operation_id: operationId }, rootDir);
       await Promise.allSettled([...pendingEventWrites]);
       try {
         await registry.markFailedAfter(taskId, error, terminalEvent => patchTerminalTaskSummaryOrThrow({
@@ -469,11 +477,13 @@ async function startCreativeWorkflowRetryTask(workflowId, options = {}) {
     last_event_seq: 0,
   }, { rootDir });
 
-  registry.emit(taskId, {
+  await recordRun(workflowId, { task_id: taskId, operation_id: operationId, retry_attempt_id: retryAttemptId }, rootDir);
+  const startedEvent = registry.emit(taskId, {
     type: 'task_started',
     progress: 0,
     message: '后台重试任务已启动。',
   });
+  if (startedEvent) await recordEvent(workflowId, startedEvent, rootDir);
 
   async function runBackgroundTask() {
     const pendingEventWrites = new Set();
@@ -546,6 +556,7 @@ async function startCreativeWorkflowRetryTask(workflowId, options = {}) {
       }));
     } catch (error) {
       const message = error.message || '创作任务重试失败。';
+      await recordFailure(workflowId, error, { task_id: taskId, operation_id: operationId, retry_attempt_id: retryAttemptId }, rootDir);
       await Promise.allSettled([...pendingEventWrites]);
       try {
         const patch = {

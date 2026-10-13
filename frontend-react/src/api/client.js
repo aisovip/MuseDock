@@ -130,6 +130,36 @@ export function resolveLocalFileUrl(value, origin = globalThis.location?.origin 
 }
 
 export const api = {
+  previewTaskBundle(workflowId, includeFiles = false, signal) {
+    return requestJson(`/api/creative-workflows/${encodeURIComponent(workflowId)}/diagnostic-bundles/preview?include_files=${includeFiles ? '1' : '0'}`,
+      { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) });
+  },
+  createTaskBundle(workflowId, includeFiles = false, signal) {
+    return requestJson(`/api/creative-workflows/${encodeURIComponent(workflowId)}/diagnostic-bundles`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ includeFiles }),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+    });
+  },
+  getTaskBundle(workflowId, bundleId, signal) {
+    return requestJson(`/api/creative-workflows/${encodeURIComponent(workflowId)}/diagnostic-bundles/${encodeURIComponent(bundleId)}`,
+      { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
+  },
+  getTaskBundleFileUrl(workflowId, bundleId) {
+    return `/api/creative-workflows/${encodeURIComponent(workflowId)}/diagnostic-bundles/${encodeURIComponent(bundleId)}/file`;
+  },
+  async verifyTaskBundleDownload(workflowId, bundleId, signal) {
+    let response;
+    try {
+      response = await fetch(this.getTaskBundleFileUrl(workflowId, bundleId), { method: 'HEAD',
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
+    } catch (cause) { throw new Error('无法连接服务，请检查网络或确认 MuseDock 服务已启动。', { cause }); }
+    if (!response.ok || !/application\/zip/i.test(response.headers.get('content-type') || '')) {
+      const error = new Error(response.status === 404 ? '诊断包已过期或文件无法读取，请重新打包。'
+        : response.status === 409 ? '压缩包尚未准备好，请等待打包完成。' : '无法下载诊断包，请检查本地服务后重试。');
+      error.status = response.status;
+      throw error;
+    }
+  },
   listApiCallLogs({ workflowId = '', state = '', before, signal } = {}) {
     const query = new URLSearchParams();
     if (workflowId) query.set('workflow_id', workflowId);

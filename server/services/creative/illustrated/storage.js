@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const workflowStore = require('../workflowStore');
 const { MODE, ErrorType, hash } = require('./contracts');
+const { failureDetails } = require('../../diagnostics/taskDiagnosticRecords');
 
 function assertContract(record) {
   if (record.creationModeId !== MODE || record.creationModeContractVersion !== 1 || record.illustrated?.schemaVersion !== 1) {
@@ -78,8 +79,9 @@ async function mutate(workflowId, options, callback) {
   });
 }
 function safeError(error) {
-  if (error instanceof ErrorType || (error?.code && /^(NARRATION_|TIMELINE_|MEDIA_|AUDIO_|BGM_|ASR_)/.test(error.code))) return { code: error.code, message: error.message, statusCode: error.statusCode || 400 };
-  return { code: 'LOCAL_OPERATION_FAILED', message: '本地处理失败，请检查媒体环境、文件与磁盘空间后重试。', statusCode: 500 };
+  const failure_details = failureDetails(error);
+  if (error instanceof ErrorType || (error?.code && /^(NARRATION_|TIMELINE_|MEDIA_|AUDIO_|BGM_|ASR_)/.test(error.code))) return { code: error.code, message: error.message, statusCode: error.statusCode || 400, failure_details };
+  return { code: 'LOCAL_OPERATION_FAILED', message: '本地处理失败，请检查媒体环境、文件与磁盘空间后重试。', statusCode: 500, failure_details };
 }
 function audit(record, action, data = {}) {
   record.illustrated.events.push({ action, ...data, at: new Date().toISOString() });

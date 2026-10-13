@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
+const { failureDetails } = require('../../diagnostics/taskDiagnosticRecords');
 const { resolveFfmpegPath, resolveFfprobePath } = require('../../tts/ttsTimeline');
 const { WhiteboardError, sha256, canvasFor, renderingFor } = require('./contracts');
 const { normalizeRenderProgress, encoderThreadsFor } = require('./renderProgress');
@@ -27,6 +28,8 @@ function execute(command, args, { input, cwd, signal, onProgress, timeoutMs = 30
     let stderr = '';
     let done = false;
     let timedOut = false;
+    let exitCode = null;
+    let exitSignal = null;
     let pendingLine = '';
     let progressQueue = Promise.resolve();
     const decoder = new StringDecoder('utf8');
@@ -43,7 +46,12 @@ function execute(command, args, { input, cwd, signal, onProgress, timeoutMs = 30
       clearTimeout(timer);
       signal?.removeEventListener('abort', stop);
       await progressQueue;
-      if (error) reject(error); else resolve({ stdout, stderr });
+      if (error) {
+        error.processDiagnostic = failureDetails({ processDiagnostic: { command: path.basename(command),
+          exitCode, exitSignal, timedOut, stderrTail: stderr, stdoutTail: stdout.slice(-2000),
+          outputLimited: true } }).process;
+        reject(error);
+      } else resolve({ stdout, stderr });
     };
     child.stdout.on('data', chunk => {
       const text = decoder.write(chunk);
@@ -63,8 +71,14 @@ function execute(command, args, { input, cwd, signal, onProgress, timeoutMs = 30
       if (pendingLine.length > 8192) pendingLine = '';
     });
     child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString('utf8')).slice(-8000); });
-    child.on('error', () => finish(new WhiteboardError('MEDIA_RUNTIME_MISSING', '本地媒体运行环境不可用，请执行 npm run setup:whiteboard 并检查 ffmpeg、ffprobe。')));
-    child.on('close', code => {
+    child.on('error', cause => {
+      const error = new WhiteboardError('MEDIA_RUNTIME_MISSING', '本地媒体运行环境不可用，请执行 npm run setup:whiteboard 并检查 ffmpeg、ffprobe。');
+      error.cause = cause;
+      finish(error);
+    });
+    child.on('close', (code, processSignal) => {
+      exitCode = code;
+      exitSignal = processSignal;
       stdout = (stdout + decoder.end()).slice(-2_000_000);
       if (signal?.aborted) return finish(new WhiteboardError('MEDIA_CANCELLED', '本地媒体处理已取消，已完成的产物会保留。'));
       if (timedOut) return finish(new WhiteboardError('MEDIA_TIMEOUT', `本地媒体处理超过 ${Math.ceil(timeoutMs / 1000)} 秒，已停止本次处理；已完成的产物会保留。`));
@@ -124,7 +138,12 @@ async function python(command, input, options = {}) {
     const result = JSON.parse(output.stdout.trim().split('\n').at(-1));
     if (!result.success) throw new Error();
     return result;
-  } catch { throw new WhiteboardError('MEDIA_FAILED', '白板媒体执行器没有返回有效结果。'); }
+  } catch {
+    const error = new WhiteboardError('MEDIA_FAILED', '白板媒体执行器没有返回有效结果。');
+    error.processDiagnostic = failureDetails({ processDiagnostic: { command: 'python', exitCode: 0,
+      stderrTail: output.stderr, stdoutTail: output.stdout.slice(-2000), outputLimited: true } }).process;
+    throw error;
+  }
 }
 
 async function preflight(options = {}) {

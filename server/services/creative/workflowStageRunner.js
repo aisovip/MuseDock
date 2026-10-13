@@ -2,6 +2,7 @@ const { CreativeWorkflowStageError } = require('../creative-video/errors');
 const htmlVideoProjectApi = require('../creative-video/htmlVideoProjectApi');
 const { createDiagnostic, normalizeDiagnostics } = htmlVideoProjectApi;
 const { safeString, STAGE_LABELS } = require('./workflowStore');
+const { failureDetails } = require('../diagnostics/taskDiagnosticRecords');
 
 function ensureSuccess(result, fallbackMessage, context = {}) {
   if (!result || result.success === false) {
@@ -52,6 +53,7 @@ function createLastFailureFromError(error, stageId, updatedAt) {
     message: safeString(error?.message) || `${STAGE_LABELS[stageId]}失败。`,
     diagnostics,
     updated_at: updatedAt,
+    failure_details: failureDetails(error),
   };
 }
 

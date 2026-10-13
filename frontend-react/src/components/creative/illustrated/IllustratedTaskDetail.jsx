@@ -12,6 +12,7 @@ import {IllustratedPlanEditor,Pager} from './IllustratedPlanEditor.jsx';
 import {IllustratedAudioPanel,IllustratedMediaPanel} from './IllustratedMediaPanel.jsx';
 import {durationLabel,STYLES} from './illustratedForm.js';
 import {cn} from '@/lib/utils.js';
+import {TaskBundleButton} from '@/components/diagnostics/TaskBundleButton.jsx';
 
 const areaFor=stage=>['content_plan','plan_review'].includes(stage)?'plan':['narration','audio_review','images'].includes(stage)?'media':'preview';
 const loadingText={save_plan:'正在保存并回读文稿与分镜...',save_settings:'正在保存并回读制作设置...',
@@ -100,7 +101,8 @@ export function IllustratedTaskDetail({workflow,onAction,onDirtyChange=()=>{}}) 
   return <div className="grid min-w-0 gap-5 text-fg-1 max-[760px]:[&_button]:min-h-11">
     <header className="grid gap-4 border-b border-line-1 pb-5">
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="mb-2 mt-0 text-xs font-semibold tracking-wide text-fg-3">旁白配图视频 · {s.settings.aspectRatio} · 25 fps</p><h1 className="m-0 break-words text-2xl font-semibold leading-tight">{workflow.title}</h1></div>
-        <Button variant="outline" disabled={busy||dirty} onClick={openSettings}><Settings2 size={16}/>本地任务参数</Button></div>
+        <div className="flex flex-wrap items-center gap-2"><TaskBundleButton workflowId={workflow.workflow_id}/>
+          <Button variant="outline" disabled={busy||dirty} onClick={openSettings}><Settings2 size={16}/>本地任务参数</Button></div></div>
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-fg-2"><span>目标 {durationLabel(s.settings.targetDurationSeconds*1000)}</span>
         <span>{s.settings.narrationMode==='enabled'?'使用配音':'无配音'}</span><span>{s.settings.burnSubtitles?'烧录字幕':'不烧录字幕'}</span><span>{STYLES.find(style=>style.id===s.settings.stylePreset)?.label}</span>
         <span>制作版本 {s.revision}{dirty?' · 有未保存修改':''}</span></div>
