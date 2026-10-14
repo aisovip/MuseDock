@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const sharedProduction = require('../shared/productionSettings');
-const { normalizeOpening, validateQuestion, freezeOpening, MAX_QUESTION_LENGTH } = require('../shared/videoOpening');
+const { normalizeOpening, validateQuestion, freezeOpening, freezeImageOpening, MAX_QUESTION_LENGTH } = require('../shared/videoOpening');
 const CANVAS_FORMATS = require('../../../resources/whiteboard/canvas-formats.json');
 const HANDWRITTEN_PRESET_ID = 'whiteboard-handwritten-explainer-v1';
 const handwrittenPreset = require('../../../resources/whiteboard/visual-presets.json').presets.find(item => item.id === HANDWRITTEN_PRESET_ID);
@@ -263,12 +263,13 @@ function materializeCandidate(candidate, input, productionPlan, narrationService
     return { ...cue, startMs, endMs: index + 1 + Math.round(weightedDurationMs * weight / totalWeight) };
   });
   const byId = new Map(cues.map(cue => [cue.id, cue]));
-  const opening = input.opening?.mode === 'question' ? freezeOpening(candidate.openingQuestion, input.narrationLanguage) : null;
+  const opening = input.opening?.mode === 'question' ? freezeOpening(candidate.openingQuestion, input.narrationLanguage)
+    : input.opening?.mode === 'image-montage' ? freezeImageOpening() : null;
   return {
     schemaVersion: 1, contractVersion: CONTRACT_VERSION,
     aspectRatio: input.aspectRatio || '16:9', canvas: canvasFor(input.aspectRatio),
     title: candidate.title.trim(), summary: candidate.summary.trim(),
-    narrationText: [...(opening ? [opening.question] : []), ...cues.map(cue => cue.text)].join('\n'), narrationLanguage: input.narrationLanguage,
+    narrationText: [...(opening?.mode === 'question' ? [opening.question] : []), ...cues.map(cue => cue.text)].join('\n'), narrationLanguage: input.narrationLanguage,
     ...(opening ? { opening } : {}),
     sourceTextSha256: sha256(input.content), timingKind: sourceCues ? 'source_srt' : 'provisional', durationMs,
     visualStyle: { rendererCompatibility: 'warm-paper-stream-v1', ...structuredClone(VISUAL_PRESETS.find(preset => preset.id === input.visualStylePreset)) },

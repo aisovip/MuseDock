@@ -111,6 +111,7 @@ function normalizeStoredConfig(input = {}, previous = {}) {
   }
   const active = normalizeActive(input.active);
   const skipValidation = input.skipValidation === true;
+  const analysisStreaming = (input.analysisStreaming ?? previous.analysisStreaming) === true;
   const localAsrInput = input.localAsr ?? previous.localAsr;
   const localAsr = {
     baseUrl: normalizeBaseUrl(localAsrInput?.baseUrl) || DEFAULT_FUNASR_BASE_URL,
@@ -124,7 +125,7 @@ function normalizeStoredConfig(input = {}, previous = {}) {
     pythonPath: normalizeString(fireRedInput?.pythonPath ?? previous.localFireRed?.pythonPath),
     modelCache: normalizeString(fireRedInput?.modelCache ?? previous.localFireRed?.modelCache),
   };
-  return { providers, active, skipValidation, localAsr, localFireRed };
+  return { providers, active, skipValidation, analysisStreaming, localAsr, localFireRed };
 }
 
 function migrateOldConfig(old) {
@@ -204,6 +205,7 @@ function toPublicConfig(stored) {
     providers: publicProviders,
     active: config.active,
     skipValidation: config.skipValidation,
+    analysisStreaming: config.analysisStreaming,
     localAsr: config.localAsr,
     localFireRed: config.localFireRed,
   };
@@ -273,6 +275,7 @@ function resolveActiveConfig(type, stored) {
   if (modelType === 'asr') result.backend = model.backend;
   if (modelType === 'text') {
     result.supportsMultimodal = model.supportsMultimodal === true;
+    result.analysisStreaming = config.analysisStreaming;
   }
   if (modelType === 'tts') {
     result.voiceId = model.voiceId;
@@ -342,6 +345,11 @@ async function getSkipValidation(options = {}) {
   return stored.skipValidation === true;
 }
 
+async function getAnalysisStreaming(options = {}) {
+  const stored = await readStoredConfig(options);
+  return stored.analysisStreaming === true;
+}
+
 module.exports = {
   DEFAULT_CONFIG_PATH,
   MODEL_TYPES,
@@ -358,6 +366,7 @@ module.exports = {
   saveConfig,
   getRuntimeConfig,
   getSkipValidation,
+  getAnalysisStreaming,
   maskApiKey,
   normalizeStoredConfig,
   migrateOldConfig,

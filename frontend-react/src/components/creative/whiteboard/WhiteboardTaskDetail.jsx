@@ -61,7 +61,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
   const latest = attempts.at(-1);
   const title = artifact?.title || workflow.title || '白板创作';
   const statusMessage = whiteboard.artifactError || workflow.current_stage_message || workflow.message || message;
-  const canMessage = Boolean(artifact) && !['unknown_external_outcome', 'failed'].includes(workflow.status);
+  const canMessage = Boolean(artifact) && !current?.stale && !whiteboard.artifactError;
   const needsAttention = Boolean(whiteboard.artifactError) || ['failed', 'unknown_external_outcome'].includes(workflow.status);
   const emptyTitle = running ? '正在整理正文与分镜' : workflow.status === 'unknown_external_outcome' ? '方案结果待核实' : workflow.status === 'failed' ? '方案生成未完成' : '等待生成方案';
   const recentProgress = progressEvents.slice(-8);
@@ -103,6 +103,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
     try {
       await sendAction(action, extras, action === 'message' ? {
         onEvent: event => {
+          if (event.type === 'chat_phase' && event.phase === 'repair') setStreamReply({ phase: 'repair', text: '' });
           if (event.type === 'chat_intent') setStreamReply({ phase: event.action, text: '' });
           if (event.type === 'chat_message_delta') setStreamReply(prev => ({ phase: 'answer', text: prev.text + (event.delta || '') }));
         },
@@ -250,7 +251,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
                         <MessageHeader className="px-0 text-fg-3">白板创作 Agent</MessageHeader>
                         <Bubble>
                           <BubbleContent className="max-w-full whitespace-pre-wrap break-words text-sm leading-7 text-fg-2">
-                            {streamReply.text || (streamReply.phase === 'revise_scenes' ? '已识别修改意图，正在创建幕修改版本...' : streamReply.phase === 'revise_plan' ? '已识别方案修改意图，正在创建新版本...' : '正在理解你的消息...')}
+                            {streamReply.text || (streamReply.phase === 'repair' ? '正在补正模型返回的操作格式...' : streamReply.phase === 'edit_lineart_prompts' ? '正在保存新提示词并处理重新生成要求...' : streamReply.phase === 'revise_scenes' ? '已识别修改意图，正在创建幕修改版本...' : streamReply.phase === 'revise_plan' ? '已识别方案修改意图，正在创建新版本...' : '正在理解你的消息...')}
                             <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-fg-3 align-middle" aria-hidden />
                           </BubbleContent>
                         </Bubble>
@@ -275,7 +276,7 @@ export function WhiteboardTaskDetail({ workflow, message, deletingWorkflowId, on
             {canMessage ? (
               <form className="grid gap-2" onSubmit={event => { event.preventDefault(); if (revision.trim()) act('message', { message: revision.trim() }); }}>
                 <label htmlFor="whiteboard-revision" className="sr-only">与白板创作 Agent 对话</label>
-                <Textarea id="whiteboard-revision" value={revision} onChange={event => setRevision(event.target.value)} rows={3} maxLength={6000} disabled={locked} placeholder={media ? '用自然语言描述，例如：1、2、6、7生成的图片为什么有手机边框？重新生成' : '用自然语言提出修改意见，或询问当前方案与分镜安排...'} className="min-h-[88px] resize-none bg-surface-1" />
+                <Textarea id="whiteboard-revision" value={revision} onChange={event => setRevision(event.target.value)} rows={3} maxLength={6000} disabled={locked} placeholder={media ? '例如：最后一幕的提示词被拒绝了，调整一下提示词重新生成' : '用自然语言提出修改意见，或询问当前方案与分镜安排...'} className="min-h-[88px] resize-none bg-surface-1" />
                 <div className="flex items-center justify-between gap-3"><span className="text-xs leading-relaxed text-fg-3">直接描述要改哪些幕、怎么改，Agent 会理解并执行；讨论保留当前版本。</span><Button type="submit" size="sm" disabled={locked || !revision.trim()}>{busy === 'message' ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} />}{busy === 'message' ? '发送中...' : '发送'}</Button></div>
               </form>
             ) : null}

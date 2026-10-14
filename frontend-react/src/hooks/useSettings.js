@@ -53,6 +53,7 @@ function normalizeServerData(json) {
     providers,
     active: { ...json.active, asr: json.active?.asr || BUILTIN_FIRERED_REF },
     skipValidation: !!json.skipValidation,
+    analysisStreaming: json.analysisStreaming === true,
     localFireRed: { baseUrl: json.localFireRed?.baseUrl || DEFAULT_FIRERED_BASE_URL,
       pythonPath: json.localFireRed?.pythonPath || '', modelCache: json.localFireRed?.modelCache || '' },
   };
@@ -84,11 +85,12 @@ function toServerPayload(state) {
       models,
     };
   }
-  return { providers, active: state.active, skipValidation: state.skipValidation, localFireRed: state.localFireRed };
+  return { providers, active: state.active, skipValidation: state.skipValidation,
+    analysisStreaming: state.analysisStreaming, localFireRed: state.localFireRed };
 }
 
 export function useSettings() {
-  const [state, setState] = useState({ providers: {}, active: { asr: BUILTIN_FIRERED_REF }, skipValidation: false,
+  const [state, setState] = useState({ providers: {}, active: { asr: BUILTIN_FIRERED_REF }, skipValidation: false, analysisStreaming: false,
     localFireRed: { baseUrl: DEFAULT_FIRERED_BASE_URL, pythonPath: '', modelCache: '' } });
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -201,6 +203,11 @@ export function useSettings() {
     setState(prev => ({ ...prev, skipValidation: !!value }));
   }, []);
 
+  const setAnalysisStreaming = useCallback((value) => {
+    setDirty(true);
+    setState(prev => ({ ...prev, analysisStreaming: value === true }));
+  }, []);
+
   const setLocalFireRedBaseUrl = useCallback((baseUrl) => {
     setDirty(true);
     setState(prev => ({ ...prev, localFireRed: { ...prev.localFireRed, baseUrl } }));
@@ -223,7 +230,7 @@ export function useSettings() {
     status, loading, saving, dirty,
     load, save,
     saveProvider, removeProvider,
-    setActive, setSkipValidation, setLocalFireRedBaseUrl, setLocalFireRedPythonPath, setLocalFireRedModelCache,
+    setActive, setSkipValidation, setAnalysisStreaming, setLocalFireRedBaseUrl, setLocalFireRedPythonPath, setLocalFireRedModelCache,
     MODEL_TYPES, MODEL_TYPE_INFO,
     MODEL_PROTOCOLS,
   };

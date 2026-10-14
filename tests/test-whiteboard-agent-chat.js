@@ -3,7 +3,9 @@ const agentRouter = require('../server/services/creative/whiteboard/agentRouter'
 const production = require('../server/services/creative/whiteboard/productionWorkflows');
 const store = require('../server/services/creative/whiteboard/mediaStore');
 const artifactStore = require('../server/services/creative/whiteboard/artifactStore');
-const aiTextModel = require('../server/services/ai/aiTextModel');
+const realAiTextModel = require('../server/services/ai/aiTextModel');
+const { isolatedConfigPath } = require('./isolated-ai-config');
+const aiTextModel = { ...realAiTextModel, callTextModel: options => realAiTextModel.callTextModel({ configPath: isolatedConfigPath, ...options }) };
 
 const context = {
   phase: 'production', status: 'waiting_approval', stageLabel: '生成线稿', gateTitle: '请检查全部线稿',
@@ -41,7 +43,9 @@ async function testClassifyIntent() {
     } } },
   });
   assert.equal(request.temperature, 0);
-  assert.deepEqual(request.outputFormat, { type: 'json' });
+  assert.equal(request.outputFormat.type, 'json');
+  assert.equal(request.outputFormat.strict, true);
+  assert.ok(request.outputFormat.schema.required.includes('edits'));
   assert.ok(request.messages[1].content.includes('1、2、6生成的图片为什么有手机边框？重新生成'));
   assert.ok(request.messages[1].content.includes('scene_6'));
   assert.deepEqual(intent.sceneIds, ['scene_1', 'scene_2', 'scene_6']);
@@ -76,7 +80,7 @@ async function testStreamAnswer() {
 
 // 流式管道真实读取：SSE 分块到达时 onDelta 逐块触发，最终文本完整。
 async function testAiTextModelStreamDeltas() {
-  const textConfig = { enabled: true, apiKey: 'fixture-only', baseUrl: 'https://example.invalid', modelId: 'fixture-text' };
+  const textConfig = { enabled: true, apiKey: 'fixture-only', baseUrl: 'https://example.invalid', modelId: 'fixture-text', protocol: 'openai-chat-completions' };
   const chunks = [
     'data: {"choices":[{"delta":{"content":"第一段。"}}]}\n\n',
     'data: {"choices":[{"delta":{"content":"第二段。"}}]}\n\n',

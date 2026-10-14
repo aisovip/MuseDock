@@ -12,7 +12,16 @@ function classifyFailure(response, httpStatus, sent) {
   if (httpStatus === 403) return new WhiteboardError('MODEL_FORBIDDEN', '当前分析模型没有访问权限，请检查模型或账号权限。');
   if (httpStatus === 429) return new WhiteboardError('MODEL_RATE_LIMITED', '分析模型请求已被限流，请稍后手动重试。', 429);
   if ([400, 404, 422].includes(httpStatus)) return new WhiteboardError('MODEL_REQUEST_REJECTED', '分析模型拒绝了请求，请检查模型名称、接口协议及模型能力后重试。');
-  if (sent || response?.configured !== false) return new WhiteboardError('UNKNOWN_EXTERNAL_OUTCOME', '分析模型请求未取得完整结果，无法确认是否已经计费。请先检查服务端记录；明确同意新的请求后才能重新生成。', 409);
+  if (sent || response?.configured !== false) {
+    const reasons = [
+      '流式接收超时：等待新数据的时间超过限制，未取得最终完成结果。',
+      '流式响应读取中断，未取得最终完成结果。',
+      '服务商未返回 SSE 流式响应，请检查所选协议与服务商的流式支持。',
+      '流式响应未通过完整性检查，请查看 API 返回记录中的具体原因。',
+    ];
+    const detail = reasons.includes(response?.failureReason) ? `具体原因：${response.failureReason}` : '';
+    return new WhiteboardError('UNKNOWN_EXTERNAL_OUTCOME', `分析模型请求未取得完整结果，无法确认是否已经计费。${detail}请先检查服务端记录；明确同意新的请求后才能重新生成。`, 409);
+  }
   return new WhiteboardError('MODEL_FAILED', '分析模型请求失败，请检查模型配置后手动重试。');
 }
 

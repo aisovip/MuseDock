@@ -1,6 +1,7 @@
 ﻿const aiModelConfig = require('./aiModelConfig');
 
 const { recordedFetch, recordModelCall } = require('../diagnostics/apiCallRecorder');
+const { readStreamResponse } = require('./aiTextStream');
 
 function normalizeBaseUrl(value) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
@@ -29,8 +30,9 @@ async function readJsonResponse(response, apiKey) {
           contentType: response.headers?.get?.('content-type') || '',
         };
       }
-    } catch {
-      // Fall through to response.json() for fetch-compatible test doubles.
+    } catch (error) {
+      return { data: null, rawText: '', parseError: '', readError: getFetchErrorDetail(error, apiKey),
+        contentType: response.headers?.get?.('content-type') || '' };
     }
   }
 
@@ -49,89 +51,6 @@ async function readJsonResponse(response, apiKey) {
       contentType: response?.headers?.get?.('content-type') || '',
     };
   }
-}
-
-function decodeChunk(value, decoder = new TextDecoder(), options = {}) {
-  if (typeof value === 'string') return value;
-  return decoder.decode(value, options);
-}
-
-async function readWithChunkTimeout(reader, chunkTimeoutMs) {
-  if (!chunkTimeoutMs || chunkTimeoutMs <= 0) return reader.read();
-  return Promise.race([
-    reader.read(),
-    wait(chunkTimeoutMs).then(() => {
-      throw new Error(`流式响应块读取超时：${Math.round(chunkTimeoutMs / 1000)} 秒内未收到新数据。`);
-    }),
-  ]);
-}
-
-async function readStreamResponse(response, apiKey, options = {}) {
-  if (!response?.body || typeof response.body.getReader !== 'function') {
-    return {
-      success: false,
-      text: '',
-      raw_response: { message: '流式响应缺少可读取的 body。' },
-    };
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let text = '';
-  const events = [];
-  const chunkTimeoutMs = Number(options.chunkTimeoutMs) || 0;
-  const onDelta = typeof options.onDelta === 'function' ? options.onDelta : null;
-
-  while (true) {
-    const { done, value } = await readWithChunkTimeout(reader, chunkTimeoutMs);
-    if (done) break;
-    buffer += decodeChunk(value, decoder, { stream: true });
-    const parts = buffer.split(/\r?\n\r?\n/);
-    buffer = parts.pop() || '';
-
-    for (const part of parts) {
-      const lines = part.split(/\r?\n/).map(line => line.trim());
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        let parsed;
-        try {
-          parsed = JSON.parse(data);
-        } catch (error) {
-          return {
-            success: false,
-            text,
-            raw_response: {
-              message: '流式响应包含无效 JSON 片段。',
-              parse_error: sanitizeErrorDetail(error?.message, apiKey),
-              preview: sanitizeErrorDetail(data.slice(0, 500), apiKey),
-            },
-          };
-        }
-        events.push(sanitizeRawResponse(parsed, apiKey));
-        // 兼容三种流事件：chat-completions（choices.delta.content）、
-        // OpenAI Responses（response.output_text.delta）、Anthropic（content_block_delta）。
-        let delta;
-        if (parsed?.choices) delta = extractContentText(parsed.choices[0]?.delta?.content);
-        else if (parsed?.type === 'response.output_text.delta' && typeof parsed.delta === 'string') delta = parsed.delta;
-        else if (parsed?.type === 'response.completed' && parsed.response?.usage) events.push({ usage: parsed.response.usage });
-        else if (parsed?.type === 'content_block_delta' && typeof parsed.delta?.text === 'string') delta = parsed.delta.text;
-        if (typeof delta === 'string') {
-          text += delta;
-          if (delta && onDelta) onDelta(delta);
-        }
-      }
-    }
-  }
-  buffer += decoder.decode();
-
-  return {
-    success: true,
-    text,
-    raw_response: { stream: true, chunks: events },
-  };
 }
 
 function getProviderError(rawResponse) {
@@ -505,11 +424,11 @@ function buildChatCompletionsBody({ modelId, messages, temperature, tools, tool_
     ...(tools ? { tools } : {}),
     ...(tool_choice ? { tool_choice } : {}),
     ...(format ? { response_format: format } : {}),
-    ...(stream ? { stream: true } : {}),
+    ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
   });
 }
 
-function buildAnthropicMessagesBody({ modelId, messages, temperature, tools, response_format, maxTokens, stream }) {
+function buildAnthropicMessagesBody({ modelId, messages, temperature, tools, tool_choice, response_format, maxTokens, stream }) {
   const mapped = toAnthropicMessages(messages, response_format);
   return JSON.stringify({
     model: modelId,
@@ -518,6 +437,9 @@ function buildAnthropicMessagesBody({ modelId, messages, temperature, tools, res
     ...(mapped.system ? { system: mapped.system } : {}),
     ...(Number.isFinite(Number(temperature)) ? { temperature } : {}),
     ...(tools ? { tools: normalizeToolsForAnthropic(tools) } : {}),
+    ...(tool_choice ? { tool_choice: typeof tool_choice === 'string'
+      ? { type: tool_choice === 'required' ? 'any' : tool_choice }
+      : tool_choice.type === 'function' ? { type: 'tool', name: tool_choice.function?.name || tool_choice.name } : tool_choice } : {}),
     ...(stream ? { stream: true } : {}),
   });
 }
@@ -565,7 +487,7 @@ async function postModelRequest({ protocol, baseUrl, apiKey, modelId, messages, 
         Authorization: `Bearer ${apiKey}`,
       },
       body: isAnthropic
-        ? buildAnthropicMessagesBody({ modelId, messages, temperature, tools, response_format, maxTokens, stream })
+        ? buildAnthropicMessagesBody({ modelId, messages, temperature, tools, tool_choice, response_format, maxTokens, stream })
         : isChat
           ? buildChatCompletionsBody({ modelId, messages, temperature, tools, tool_choice, response_format, maxTokens, maxOutputTokens, reasoningEffort, stream })
           : buildOpenAiResponsesBody({ modelId, messages, temperature, tools, tool_choice, response_format, reasoningEffort, maxOutputTokens, stream }),
@@ -646,6 +568,8 @@ async function callTextModel(options = {}) {
   const log = logger && typeof logger === 'object' ? logger : null;
 
   const config = textConfig || await aiModelConfig.getRuntimeConfig('text', { configPath });
+  // 显式模型快照也读取当前全局开关，保存后下一次请求即生效。
+  const forceStream = textConfig ? await aiModelConfig.getAnalysisStreaming({ configPath }) : config?.analysisStreaming === true;
   const provider = normalizeString(config && config.provider);
   const protocol = normalizeProtocol(config && config.protocol);
   const response_format = resolveResponseFormat(protocol, outputFormat, explicitResponseFormat);
@@ -671,9 +595,12 @@ async function callTextModel(options = {}) {
   }
 
   const totalMessageChars = messages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
-  // 仅在调用方同时要求流式并提供 onDelta 回调、且不涉及工具调用时才走流式读取；
-  // 历史上 stream 选项一直被忽略为非流式，保持既有调用方行为完全不变。
-  const effectiveStream = stream === true && typeof onDelta === 'function' && !tools && !tool_choice;
+  // 全局开关覆盖调用级选项；关闭时保留已有增量展示与工具调用行为。
+  const effectiveStream = forceStream || (stream === true && typeof onDelta === 'function' && !tools && !tool_choice);
+  const allowNonStreamFallback = !forceStream && fallbackToNonStreamOnGatewayTimeout;
+  const readFailure = parsed => ({ success: false, configured: true,
+    message: `${provider || '分析模型'} 响应正文读取失败：${parsed.readError}`,
+    model: toModelInfo(provider, modelId, protocol), raw_response: { read_error: parsed.readError } });
   const requestLabel = `[AI] ${provider}/${modelId} protocol=${protocol} stream=${effectiveStream} msgs=${messages.length} chars=${totalMessageChars} timeout=${Math.round(requestTimeoutMs / 1000)}s`;
   if (log) log.info(`${requestLabel} — 开始请求`);
 
@@ -743,7 +670,7 @@ async function callTextModel(options = {}) {
   }
 
   const timedOut = isAbortLikeError(lastFetchError);
-  const canFallbackToNonStream = effectiveStream && fallbackToNonStreamOnGatewayTimeout
+  const canFallbackToNonStream = effectiveStream && allowNonStreamFallback
     && (shouldRetryStatus(response?.status) || timedOut);
   if (canFallbackToNonStream) {
     if (log) log.warn(`${requestLabel} — 流式请求失败${timedOut ? '(超时)' : '(HTTP ' + response?.status + ')'}，降级为非流式重试`);
@@ -782,6 +709,7 @@ async function callTextModel(options = {}) {
     if (response.ok) {
       const parsedResponse = await readJsonResponse(response, apiKey);
       cleanupResponseTimeout(response);
+      if (parsedResponse.readError) return readFailure(parsedResponse);
       const rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(parsedResponse.data, apiKey));
       const text = extractResponseText(rawResponse);
       if (typeof text === 'string') {
@@ -798,6 +726,8 @@ async function callTextModel(options = {}) {
           },
         };
       }
+      return { success: false, configured: true, message: `${provider || '分析模型'} 返回结果缺少文本内容。`,
+        model: toModelInfo(provider, modelId, protocol), raw_response: rawResponse };
     }
   }
 
@@ -816,6 +746,7 @@ async function callTextModel(options = {}) {
   if (!response.ok) {
     const parsedResponse = await readJsonResponse(response, apiKey);
     cleanupResponseTimeout(response);
+    if (parsedResponse.readError) return readFailure(parsedResponse);
     const rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(parsedResponse.data, apiKey));
     const detail = sanitizeErrorDetail(getProviderError(rawResponse), apiKey)
       || sanitizeErrorDetail(parsedResponse.rawText, apiKey).slice(0, 500)
@@ -832,13 +763,20 @@ async function callTextModel(options = {}) {
   if (effectiveStream) {
     let streamResult;
     try {
-      streamResult = await readStreamResponse(response, apiKey, {
-        chunkTimeoutMs: streamChunkTimeoutMs,
+      // SSE 收到响应后改用每次读块的空闲超时，持续输出不受非流式总时限截断。
+      if (/text\/event-stream/i.test(response.headers?.get?.('content-type') || '')) {
+        cleanupResponseTimeout(response);
+      }
+      streamResult = await readStreamResponse(response, {
+        protocol,
+        chunkTimeoutMs: Number(streamChunkTimeoutMs) > 0 ? streamChunkTimeoutMs
+          : Number(requestTimeoutMs) > 0 ? requestTimeoutMs : 180000,
         onDelta,
       });
+      streamResult.raw_response = attachNormalizedToolCalls(sanitizeRawResponse(streamResult.raw_response, apiKey));
     } catch (error) {
       cleanupResponseTimeout(response);
-      if (fallbackToNonStreamOnGatewayTimeout && isAbortLikeError(error)) {
+      if (allowNonStreamFallback && isAbortLikeError(error)) {
         if (log) log.warn(`${requestLabel} — 流式响应读取超时，降级为非流式重试`);
         try {
           const fallbackResponse = await postModelRequest({
@@ -860,6 +798,7 @@ async function callTextModel(options = {}) {
           if (fallbackResponse.ok) {
             const parsedResponse = await readJsonResponse(fallbackResponse, apiKey);
             cleanupResponseTimeout(fallbackResponse);
+            if (parsedResponse.readError) return readFailure(parsedResponse);
             const rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(parsedResponse.data, apiKey));
             const text = extractResponseText(rawResponse);
             if (typeof text === 'string') {
@@ -893,14 +832,16 @@ async function callTextModel(options = {}) {
           };
         }
       }
-      const detail = sanitizeErrorDetail(isAbortLikeError(error)
-        ? getAbortErrorMessage(error, requestTimeoutMs)
-        : error?.message, apiKey) || '读取流式响应失败';
+      const detail = getFetchErrorDetail(error, apiKey) || '读取流式响应失败';
       return {
         success: false,
         configured: true,
         message: `${provider || '分析模型'} 流式响应读取失败：${detail}`,
+        failureReason: error.code === 'STREAM_IDLE_TIMEOUT'
+          ? '流式接收超时：等待新数据的时间超过限制，未取得最终完成结果。'
+          : '流式响应读取中断，未取得最终完成结果。',
         model: toModelInfo(provider, modelId, protocol),
+        raw_response: sanitizeRawResponse(error.raw_response, apiKey),
       };
     }
     cleanupResponseTimeout(response);
@@ -909,11 +850,14 @@ async function callTextModel(options = {}) {
         success: false,
         configured: true,
         message: `${provider || '分析模型'} 流式响应解析失败：${getProviderError(streamResult.raw_response) || '响应格式无效'}`,
+        failureReason: /未返回 SSE/.test(getProviderError(streamResult.raw_response))
+          ? '服务商未返回 SSE 流式响应，请检查所选协议与服务商的流式支持。'
+          : '流式响应未通过完整性检查，请查看 API 返回记录中的具体原因。',
         model: toModelInfo(provider, modelId, protocol),
         raw_response: streamResult.raw_response,
       };
     }
-    if (!streamResult.text) {
+    if (!streamResult.text && !streamResult.raw_response?.normalized_tool_calls?.length) {
       return {
         success: false,
         configured: true,
@@ -936,6 +880,7 @@ async function callTextModel(options = {}) {
 
   const parsedResponse = await readJsonResponse(response, apiKey);
   cleanupResponseTimeout(response);
+  if (parsedResponse.readError) return readFailure(parsedResponse);
   let rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(parsedResponse.data, apiKey));
 
   if (parsedResponse.parseError && parsedResponse.rawText) {
@@ -987,11 +932,13 @@ async function callTextModel(options = {}) {
     if (!retryResponse.ok) {
       const retryParsed = await readJsonResponse(retryResponse, apiKey);
       cleanupResponseTimeout(retryResponse);
+      if (retryParsed.readError) return readFailure(retryParsed);
       rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(retryParsed.data, apiKey));
       break;
     }
     const retryParsed = await readJsonResponse(retryResponse, apiKey);
     cleanupResponseTimeout(retryResponse);
+    if (retryParsed.readError) return readFailure(retryParsed);
     rawResponse = attachNormalizedToolCalls(sanitizeRawResponse(retryParsed.data, apiKey));
     text = extractResponseText(rawResponse);
   }

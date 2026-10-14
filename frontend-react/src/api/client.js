@@ -210,6 +210,11 @@ export const api = {
       method: 'POST', signal: AbortSignal.timeout(20000),
     });
   },
+  correctTranscription(id) {
+    return requestJson(`/api/transcriptions/${encodeURIComponent(id)}/corrections`, {
+      method: 'POST', signal: AbortSignal.timeout(20000),
+    });
+  },
   startTranscriptionLogin() {
     return requestJson('/api/transcriptions/douyin/login', { method: 'POST', signal: AbortSignal.timeout(90000) });
   },

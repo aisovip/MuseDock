@@ -59,6 +59,10 @@ function createTranscriptionRouter({ service = createTranscriptionService(), dou
     }
     res.json({ success: true, data: await service.remove(req.params.id) });
   }));
+  router.post('/:id/corrections', route(async (req, res) => {
+    assertLocalClient(req, '请在运行 MuseDock 的电脑上发起转写校订。');
+    res.status(202).json({ success: true, data: await service.startCorrection(req.params.id) });
+  }));
   router.post('/:id/corrections/retry', route(async (req, res) => res.status(202).json({ success: true, data: await service.retryCorrection(req.params.id) })));
   router.get('/:id/files/:kind', route(async (req, res) => {
     const file = await service.file(req.params.id, req.params.kind);

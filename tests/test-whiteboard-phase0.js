@@ -19,7 +19,7 @@ function candidateFor(request, title = '从一个小动作开始') {
     : [{ id: 'cue_1', text: input.inputMode === 'text' ? input.content : '面对复杂任务时，我们常常先寻找更容易的事情。把任务拆成一个今天就能完成的小动作，开始就会变得具体。' }];
   return {
     schemaVersion: 1, title, summary: '先解释拖延的感受，再用一个具体的小动作说明如何开始。', cues,
-    ...(input.opening ? { openingQuestion: input.opening.question || '为什么总是难以开始？' } : {}),
+    ...(input.opening?.mode === 'question' ? { openingQuestion: input.opening.question || '为什么总是难以开始？' } : {}),
     scenes: cues.map((cue, index) => ({ id: `scene_${index + 1}`, title: `开始行动 ${index + 1}`, cueIds: [cue.id], imagePrompt: '暖米黄纸张上，一个人把大纸张拆成三张小纸条，粗黑轮廓和少量平涂，主体分离，四周留白。' })),
   };
 }
@@ -211,6 +211,28 @@ const cases = [
     assert.equal(ctx.modelCalls.length, 1);
     const history = await workflows.getWhiteboardArtifact(id, first.whiteboard.current.attemptId, ctx.options);
     assert.equal(history.artifact.opening.question, original.opening.question);
+  })],
+  ['图片汇总创建、切换和关闭保持正文，不额外拟定问题', () => fixture(async ctx => {
+    const id = await ctx.create({ ...TOPIC, opening: { mode: 'image-montage' } });
+    const first = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(first.status, 'waiting_approval', first.message);
+    const original = first.whiteboard.current.artifact;
+    assert.equal(original.opening.mode, 'image-montage');
+    assert.equal(original.opening.question, undefined);
+    assert.doesNotMatch(ctx.modelCalls[0].messages[0].content, /启用提问开场/);
+    await ctx.action(id, 'update_plan', { input: { opening: { mode: 'question', question: '怎样开始？' } } });
+    let next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening.question, '怎样开始？');
+    await ctx.action(id, 'update_plan', { input: { opening: { mode: 'image-montage' } } });
+    next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening.mode, 'image-montage');
+    assert.equal(next.whiteboard.current.artifact.narrationText, original.narrationText);
+    assert.deepEqual(next.whiteboard.current.artifact.cues, original.cues);
+    assert.equal((await ctx.action(id, 'update_plan', { input: { opening: { mode: 'question', question: '' } } })).code, 'INVALID_OPENING');
+    await ctx.action(id, 'update_plan', { input: { opening: { mode: 'disabled' } } });
+    next = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(next.whiteboard.current.artifact.opening, undefined);
+    assert.equal(ctx.modelCalls.length, 1);
   })],
   ['制作设置只生成本地新版本，不额外调用模型', () => fixture(async ctx => {
     const id = await ctx.create();
@@ -429,6 +451,18 @@ const cases = [
     assert.equal((await workflows.runCreativeWorkflow(id, ctx.options)).status, 'waiting_approval');
     assert.equal(ctx.modelCalls.length, 2);
     assert.equal(JSON.parse(ctx.modelCalls.at(-1).messages[1].content).previousFailure, undefined);
+  })],
+  ['流式超时保留具体原因且仍要求授权，不展示供应商原始错误', () => fixture(async ctx => {
+    ctx.response = () => ({ success: false, configured: true,
+      message: 'fixture-placeholder 上游私有错误',
+      failureReason: '流式接收超时：等待新数据的时间超过限制，未取得最终完成结果。' });
+    const id = await ctx.create();
+    const result = await workflows.runCreativeWorkflow(id, ctx.options);
+    assert.equal(result.status, 'unknown_external_outcome');
+    assert.match(result.message, /具体原因：流式接收超时/);
+    assert.doesNotMatch(result.message, /fixture-placeholder|私有错误/);
+    assert.equal((await ctx.action(id, 'retry')).code, 'ACTION_NOT_ALLOWED');
+    assert.equal(ctx.modelCalls.length, 1);
   })],
   ['服务重启保留待确认，处理中请求恢复为未知结果', () => fixture(async ctx => {
     const id = await ctx.create();

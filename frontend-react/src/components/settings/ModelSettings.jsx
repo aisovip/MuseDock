@@ -38,6 +38,8 @@ export function ModelSettings({ modelSettings }) {
         providerList={modelSettings.providerList}
         activeModels={modelSettings.activeModels}
         onChange={modelSettings.setActive}
+        analysisStreaming={modelSettings.state.analysisStreaming}
+        onAnalysisStreamingChange={modelSettings.setAnalysisStreaming}
         localFireRed={modelSettings.state.localFireRed}
         onLocalFireRedBaseUrlChange={modelSettings.setLocalFireRedBaseUrl}
         onLocalFireRedPythonPathChange={modelSettings.setLocalFireRedPythonPath}

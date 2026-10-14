@@ -9,6 +9,7 @@ const { resolveFfmpegPath, resolveFfprobePath } = require('../../tts/ttsTimeline
 const { WhiteboardError, sha256, canvasFor, renderingFor } = require('./contracts');
 const { normalizeRenderProgress, encoderThreadsFor } = require('./renderProgress');
 const { openingRecipe, renderVideoOpening } = require('../shared/videoOpeningRenderer');
+const { launchOpeningBrowser } = require('../shared/imageOpeningRenderer');
 
 const RESOURCE_ROOT = path.join(__dirname, '../../../resources/whiteboard');
 const RENDER_PROFILE = Object.freeze({ width: 1920, height: 1080, fps: 60, codec: 'h264', pixelFormat: 'yuv420p', preset: 'fast', crf: 18 });
@@ -157,6 +158,15 @@ async function preflight(options = {}) {
   ]);
   if (results[3].status === 'rejected') throw new WhiteboardError('MEDIA_FONT_MISSING', '字幕字体不可用，请配置 MUSEDOCK_WHITEBOARD_FONT 为可用的中文字体文件。');
   for (const result of results) if (result.status === 'rejected') throw result.reason;
+  if (options.opening?.mode === 'image-montage') {
+    if (['adelay', 'apad', 'atrim'].some(filter => !new RegExp(`\\b${filter}\\s`).test(results[1].value.stdout))) {
+      throw new WhiteboardError('MEDIA_RUNTIME_MISSING', '当前 ffmpeg 缺少正文音频延迟滤镜，请安装完整版 ffmpeg 后重试。');
+    }
+    let browser;
+    try { browser = await launchOpeningBrowser(options); }
+    catch { throw new WhiteboardError('MEDIA_RUNTIME_MISSING', '图片汇总开头需要本地 Chrome，请安装 Chrome 后重试。'); }
+    finally { if (browser) await browser.close(); }
+  }
   if (!/\bass\s/.test(results[1].value.stdout)) throw new WhiteboardError('MEDIA_RUNTIME_MISSING', '当前 ffmpeg 缺少 ASS 字幕滤镜，请安装带 libass 的 ffmpeg。');
   const bgm = options.bgmMode === 'enabled' ? await prepareBackgroundMusic() : null;
   if (bgm && ['amix', 'atrim', 'afade', 'volume', 'aresample', 'aformat', 'asetpts'].some(filter => !new RegExp(`\\b${filter}\\s`).test(results[1].value.stdout))) {
@@ -173,7 +183,7 @@ async function preflight(options = {}) {
   if (sources.files.find(file => file.file === 'assets/drawing-hand.png')?.sha256 !== handSha256) throw new WhiteboardError('DRAWING_HAND_INVALID', '固定画笔素材缺失或已变化，请恢复配套素材后重试。');
   return { ffmpeg, ffprobe, font, bgm, encoderThreads: encoderThreadsFor(results[4].value.stdout),
     recipe: { ...RENDER_PROFILE, ...canvasFor(options.aspectRatio), fontSha256, handSha256, sourceSha256, adapterSha256, coreSha256, ...styleRecipe,
-      ...(options.opening ? { opening: await openingRecipe(hashFile) } : {}) } };
+      ...(options.opening ? { opening: await openingRecipe(hashFile, options.opening.mode) } : {}) } };
 }
 
 async function probe(file, runtime, options = {}) {
@@ -226,7 +236,9 @@ async function renderScene({ image, annotation, output, scene, showHand }, runti
   return { ...validation, encoderThreads: rendered.encoderThreads, renderElapsedMs: rendered.renderElapsedMs };
 }
 
-async function finalVideo({ sceneFiles, audioFile, cues, durationMs, directory, burnSubtitles, subtitleStyle, bgm = null }, runtime, options = {}) {
+async function finalVideo({ sceneFiles, audioFile, audioOffsetMs = 0, cues, durationMs, directory, burnSubtitles, subtitleStyle, bgm = null }, runtime, options = {}) {
+  if (!Number.isSafeInteger(audioOffsetMs) || audioOffsetMs < 0 || audioOffsetMs >= durationMs) throw new WhiteboardError('TIMELINE_INVALID', '正文音频起始时间无效。');
+  const voiceDelay = audioOffsetMs ? `,adelay=${audioOffsetMs},apad,atrim=duration=${durationMs / 1000}` : '';
   const frameCount = Math.ceil(durationMs * 60 / 1000);
   const canvas = runtime.recipe ? { width: runtime.recipe.width, height: runtime.recipe.height } : canvasFor();
   // Copy to controlled ASCII names so concat/filter inputs never contain user path syntax.
@@ -267,7 +279,7 @@ async function finalVideo({ sceneFiles, audioFile, cues, durationMs, directory, 
     const musicIndex = audioFile ? 2 : 1;
     const filters = [`[${musicIndex}:a:0]aresample=24000,aformat=channel_layouts=mono,atrim=duration=${seconds},asetpts=PTS-STARTPTS,volume=${bgm.recipe.musicVolumeDb}dB,afade=t=in:st=0:d=${fadeIn},afade=t=out:st=${seconds - fadeOut}:d=${fadeOut}[music]`];
     if (audioFile) {
-      filters.push(`[1:a:0]aresample=24000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS,volume=${bgm.recipe.narrationVolumeDb}dB[voice]`);
+      filters.push(`[1:a:0]aresample=24000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS${voiceDelay},volume=${bgm.recipe.narrationVolumeDb}dB[voice]`);
       // Keep both inputs alive until narration ends. Older bundled FFmpeg always
       // normalizes amix by two; compensate without its newer normalize option.
       // The -1.5 dB voice / -18 dB music gains leave headroom for their sum.
@@ -278,7 +290,8 @@ async function finalVideo({ sceneFiles, audioFile, cues, durationMs, directory, 
       '-map', '0:v:0', '-map', audioFile ? '[mixed]' : '[music]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
       '-ar', '24000', '-ac', '1', '-movflags', '+faststart', 'final.mp4'], cwdOptions);
   } else if (audioFile) await execute(runtime.ffmpeg, ['-v', 'error', '-n', '-i', videoName, '-i', audioFile,
-    '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '24000', '-ac', '1', '-movflags', '+faststart', 'final.mp4'], cwdOptions);
+    '-map', '0:v:0', '-map', '1:a:0', ...(audioOffsetMs ? ['-af', `aresample=24000,aformat=channel_layouts=mono,asetpts=PTS-STARTPTS${voiceDelay}`] : []),
+    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '24000', '-ac', '1', '-movflags', '+faststart', 'final.mp4'], cwdOptions);
   else await fsp.copyFile(path.join(directory, videoName), path.join(directory, 'final.mp4'), fs.constants.COPYFILE_EXCL);
   return validateVideo(path.join(directory, 'final.mp4'), { frameCount, audio: Boolean(audioFile || bgm), durationMs, canvas }, runtime, options);
 }
@@ -287,9 +300,9 @@ async function extractFrame(video, output, ms, runtime, options = {}) {
   await execute(runtime.ffmpeg, ['-v', 'error', '-n', '-ss', String(Math.max(0, ms) / 1000), '-i', video, '-frames:v', '1', output], options);
 }
 
-async function renderOpening({ images, question, output, endMs }, runtime, options = {}) {
+async function renderOpening({ images, mode = 'question', question, output, endMs }, runtime, options = {}) {
   const frameCount = Math.ceil(endMs * 60 / 1000);
-  const result = await renderVideoOpening({ images, question, output, canvas: runtime.recipe, fps: 60, frameCount },
+  const result = await renderVideoOpening({ images, mode, question, output, canvas: runtime.recipe, fps: 60, frameCount },
     { ...runtime, pythonPath: pythonPath(options), execute }, options);
   return { ...result, validation: await validateVideo(output, { frameCount }, runtime, options) };
 }

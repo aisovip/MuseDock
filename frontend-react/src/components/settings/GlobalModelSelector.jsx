@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button.jsx';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog.jsx';
 import { Input } from '@/components/ui/input.jsx';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.jsx';
+import { Switch } from '@/components/ui/switch.jsx';
 import { BUILTIN_FIRERED_REF, DEFAULT_FIRERED_BASE_URL } from './modelDefaults.js';
 
 const MODEL_SELECTOR_HELP_TEXT = {
@@ -11,6 +12,7 @@ const MODEL_SELECTOR_HELP_TEXT = {
 };
 
 export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, activeModels, onChange,
+  analysisStreaming = false, onAnalysisStreamingChange,
   localFireRed, onLocalFireRedBaseUrlChange, onLocalFireRedPythonPathChange, onLocalFireRedModelCacheChange, disabled = false }) {
   return (
     <section className="mb-4 rounded-lg border border-[#e7e9ee] bg-white p-4">
@@ -67,6 +69,18 @@ export function GlobalModelSelector({ modelTypes, modelTypeInfo, providerList, a
                   );
                 })}
               </select>}
+              {type === 'text' ? (
+                <div className="mt-2 rounded-md border border-[#e7e9ee] bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <label htmlFor="analysis-streaming" className="cursor-pointer text-sm font-medium">分析模型流式请求</label>
+                    <Switch id="analysis-streaming" checked={analysisStreaming} disabled={disabled}
+                      onCheckedChange={onAnalysisStreamingChange} aria-describedby="analysis-streaming-help" />
+                  </div>
+                  <p id="analysis-streaming-help" className="mb-0 mt-2 text-xs leading-5 text-[#69717e]">
+                    开启后，所有分析模型请求都使用流式接收，包括方案生成、视觉分析和 Agent 对话。服务商需支持流式；接收失败时不会自动降级为非流式请求。默认关闭，修改后请点击“保存模型配置”，后续请求生效。
+                  </p>
+                </div>
+              ) : null}
               {type === 'asr' && value === BUILTIN_FIRERED_REF ? (
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs leading-5 text-[#69717e]">FireRed 识别与字词声学对齐，无需 API Key。</span>

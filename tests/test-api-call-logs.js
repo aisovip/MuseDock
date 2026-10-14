@@ -7,7 +7,9 @@ const Database = require('better-sqlite3');
 const express = require('express');
 const { createApiCallStore } = require('../server/services/diagnostics/apiCallStore');
 const { recordedFetch, runWithApiCallContext, apiCallContextMiddleware, flushApiCallRecords, getApiCallStorageWarning } = require('../server/services/diagnostics/apiCallRecorder');
-const { callTextModel } = require('../server/services/ai/aiTextModel');
+const realAiTextModel = require('../server/services/ai/aiTextModel');
+const { isolatedConfigPath } = require('./isolated-ai-config');
+const callTextModel = options => realAiTextModel.callTextModel({ configPath: isolatedConfigPath, ...options });
 const workflows = require('../server/services/creative/creativeWorkflows');
 const apiCallLogsRouter = require('../server/routes/apiCallLogs');
 const { redactBody } = require('../server/services/diagnostics/apiCallRedaction');
@@ -25,6 +27,7 @@ async function seedWhiteboardCalls(store, rootDir) {
   const options = { rootDir, mediaRoot: path.join(rootDir, 'media'), services: {
     idFactory: () => `20260916120000${String(++sequence).padStart(6, '0')}`,
     aiModelConfig: { getRuntimeConfig: async type => type === 'tts' ? null : TEXT_CONFIG },
+    aiTextModel: { callTextModel },
     fetchImpl: async () => {
       providerCalls += 1;
       return jsonResponse({ output_text: malformed ? `不是 JSON 的模型返回，第 ${providerCalls} 次。\n末尾诊断内容。` : JSON.stringify({

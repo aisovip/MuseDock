@@ -44,10 +44,10 @@ function toneAmplitude(samples, frequency = 440) {
       return file;
     }
     const shortScene = await scene(6);
-    async function render(name, { audioFile = null, music = null, seconds = 6, sceneFile = shortScene } = {}) {
+    async function render(name, { audioFile = null, audioOffsetMs = 0, music = null, seconds = 6, sceneFile = shortScene } = {}) {
       const directory = path.join(root, name);
       await fs.mkdir(directory);
-      const validation = await tools.finalVideo({ sceneFiles: [sceneFile], audioFile, bgm: music, cues: [],
+      const validation = await tools.finalVideo({ sceneFiles: [sceneFile], audioFile, audioOffsetMs, bgm: music, cues: [],
         durationMs: seconds * 1000, directory, burnSubtitles: false }, runtime);
       assert.equal(validation.frameCount, seconds * 60);
       assert.equal(validation.audio, Boolean(audioFile || music));
@@ -81,6 +81,17 @@ function toneAmplitude(samples, frequency = 440) {
     assert.ok(rms(musicSamples.slice(0, 1200)) < middleRms * 0.35, 'BGM 起始需要淡入');
     assert.ok(rms(musicSamples.slice(-1200)) < middleRms * 0.35, 'BGM 结尾需要淡出');
     console.log('PASS BGM 开关、旁白混音、无旁白音乐、静音、首尾淡入淡出和旁白原文件保护');
+
+    const openingScene = await scene(9);
+    const delayed = await render('image-opening-voice', { audioFile: voice, audioOffsetMs: 3000, seconds: 9, sceneFile: openingScene });
+    const delayedMusic = await render('image-opening-bgm', { audioFile: voice, audioOffsetMs: 3000, music: bgm, seconds: 9, sceneFile: openingScene });
+    assert.ok(rms(await samples(delayed, 0.2, 2.5)) < 0.00001, '图片开头前三秒不能提前播放正文旁白');
+    assert.ok(toneAmplitude(await samples(delayed, 3.2, 2)) > 0.1, '正文旁白应在三秒后开始');
+    assert.ok(toneAmplitude(await samples(delayedMusic, 0.2, 2.5)) < 0.003, '有 BGM 时正文旁白仍不能提前');
+    assert.ok(toneAmplitude(await samples(delayedMusic, 3.2, 2)) > 0.07, 'BGM 混音后应保留顺延的正文旁白');
+    assert.ok(rms(await samples(delayedMusic, 1.2, 1)) > 0.0001, 'BGM 应从开头播放');
+    assert.equal(await tools.hashFile(voice), originalVoiceHash);
+    console.log('PASS 图片开头正文旁白精确延迟 3 秒、有无 BGM、9 秒音画时长与原始音频保护');
 
     // The bundled track is about 132 seconds; the tail must contain its next loop.
     const longScene = await scene(136);

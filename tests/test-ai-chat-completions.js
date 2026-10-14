@@ -1,13 +1,14 @@
 const assert = require('node:assert/strict');
 const { callTextModel } = require('../server/services/ai/aiTextModel');
 const { runWithApiCallContext } = require('../server/services/diagnostics/apiCallRecorder');
+const { isolatedConfigPath } = require('./isolated-ai-config');
 
 const config = { enabled: true, provider: 'fixture', protocol: 'openai-chat-completions',
   apiKey: 'fixture-only-key', baseUrl: 'https://example.invalid/v1/', modelId: 'deepseek-flash' };
 const json = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 const reply = (content, extra = {}) => ({ choices: [{ message: { role: 'assistant', content, ...extra } }] });
 const call = options => runWithApiCallContext({ store: { start: () => null } }, () => callTextModel({
-  textConfig: config, messages: [{ role: 'user', content: '测试' }], maxRetries: 0, ...options,
+  configPath: isolatedConfigPath, textConfig: config, messages: [{ role: 'user', content: '测试' }], maxRetries: 0, ...options,
 }));
 
 async function run() {

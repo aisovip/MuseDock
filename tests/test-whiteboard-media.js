@@ -12,6 +12,7 @@ const { sha256, canvasFor, subtitleStyleFor } = require('../server/services/crea
 
 const portrait = process.argv.includes('--portrait');
 const openingTest = process.argv.includes('--opening');
+const imageOpeningTest = process.argv.includes('--image-opening');
 const aspectRatio = portrait ? '9:16' : '16:9';
 const canvas = canvasFor(aspectRatio);
 
@@ -301,7 +302,8 @@ async function testSubtitleStyles(ctx) {
   if (process.argv.includes('--subtitle-timing')) return testSubtitleTiming(ctx);
   if (process.argv.includes('--subtitles')) return testSubtitleStyles(ctx);
   if (process.argv.includes('--silent')) return testSilentMedia(ctx);
-  const id = await ctx.create(false, openingTest ? { input: { opening: { mode: 'question', question: '' } } } : {});
+  const id = await ctx.create(false, openingTest ? { input: { opening: { mode: 'question', question: '' } } }
+    : imageOpeningTest ? { input: { opening: { mode: 'image-montage' } } } : {});
   const start = await ctx.action(id, 'start_production');
   assert.equal(start.success, true, start.message);
   let oldPayload;
@@ -338,7 +340,7 @@ async function testSubtitleStyles(ctx) {
   assert.equal(record.status, 'done');
   assert.equal(ctx.calls.tts, 1); assert.equal(ctx.calls.image, 2);
   const final = record.whiteboard.media.current.final_delivery;
-  assert.equal(final.validation.frameCount, openingTest ? 540 : 360); assert.equal(final.validation.audio, true);
+  assert.equal(final.validation.frameCount, openingTest || imageOpeningTest ? 540 : 360); assert.equal(final.validation.audio, true);
   assert.equal(record.whiteboard.media.approvals.length, 5);
   const file = await workflows.getWhiteboardMediaFile(id, final.video.id, ctx.options);
   assert.equal(file.success, true);
@@ -347,6 +349,23 @@ async function testSubtitleStyles(ctx) {
   assert.equal(info.streams[0].width, canvas.width);
   assert.equal(info.streams[0].height, canvas.height);
   assert.equal(info.streams[1].codec_name, 'aac');
+  if (imageOpeningTest) {
+    const timing = await mediaStore.readData(record, record.whiteboard.media.current.full_narration.timeline, ctx.rootDir);
+    assert.equal(timing.opening.endMs, 3000);
+    assert.equal(timing.audioOffsetMs, 3000);
+    assert.equal(timing.scenes[0].startMs, 3000);
+    assert.equal(timing.cues[0].startMs, 3100);
+    assert.equal(timing.cues.length, 2);
+    assert.deepEqual(final.opening.images, candidate.scenes.map(scene => ({ sceneId: scene.id, sha256: record.whiteboard.media.lineart[scene.id].image.sha256 })));
+    const receipt = await mediaStore.readData(record, final.receipt, ctx.rootDir);
+    assert.deepEqual(receipt.openingReceipt.visibleImages, [0, 1]);
+    assert.equal(receipt.openingReceipt.addedText, false);
+    assert.equal(receipt.openingReceipt.frameCount, 180);
+    const openingFile = (await mediaStore.mediaFile(record, final.openingVideo, ctx.rootDir)).path;
+    assert.equal((await mediaTools.probe(openingFile, ctx.runtime)).streams.length, 1);
+    console.log('PASS 图片汇总完整制作链路：180 帧无文字开头、全部图哈希、正文 TTS 一次、字幕顺延、540 帧成片；外部服务调用 0');
+    return;
+  }
   if (openingTest) {
     const timing = await mediaStore.readData(record, record.whiteboard.media.current.full_narration.timeline, ctx.rootDir);
     assert.equal(timing.opening.endMs, 2220);

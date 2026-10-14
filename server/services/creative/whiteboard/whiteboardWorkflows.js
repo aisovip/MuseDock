@@ -174,13 +174,14 @@ function assertActiveAttempt(record, attempt) {
 }
 
 async function actOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) {
+  if (payload.action === 'message') return chatOnWhiteboardWorkflow(workflowId, payload, options);
   if (payload.action === 'ask_status') {
     const record = await readWorkflow(workflowId, options.rootDir);
     assertContract(record);
     return { success: true, workflow_id: workflowId, workflow: await getView(record, options), startTask: false };
   }
   const { record, result } = await mutate(workflowId, options, async (record, now) => {
-    const requestHash = sha256(payload);
+    const requestHash = options.chatRequestHash || sha256(payload);
     if (payload.requestId) {
       if (typeof payload.requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,80}$/.test(payload.requestId)) throw new WhiteboardError('INVALID_INPUT', '操作请求标识无效。');
       const previous = record.whiteboard.actionReceipts?.find(item => item.requestId === payload.requestId);
@@ -193,19 +194,6 @@ async function actOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) {
     if (payload.action !== 'save_lineart_prompt' && payload.interactionId && !record.whiteboard.media?.interactionId) {
       const interaction = record.whiteboard.interactions?.find(item => item.id === payload.interactionId);
       if (!interaction || interaction.status !== 'pending' || interaction.expectedIdentity !== record.whiteboard.current?.identity) throw new WhiteboardError('STALE_IDENTITY', '这张卡片已被新版本替代，请使用当前卡片。', 409);
-    }
-    if (payload.action === 'message') {
-      const text = String(payload.message || '').trim();
-      if (!text || text.length > 6000) throw new WhiteboardError('INVALID_INPUT', '请输入有效消息，最多 6000 个字符。');
-      if (/^(确认|通过)(当前|本版|这版)?(方案|内容与制作方案|旁白|线稿|标注|当前产物|成片|视频)[。！!\s]*$/u.test(text)) {
-        payload = { ...payload, action: record.whiteboard.media?.gate ? 'approve_media' : 'approve_initial', confirmed: true };
-      } else if (/为什么|为何|怎么安排|如何安排|当前状态|进度|[？?]$/u.test(text)) {
-        const artifact = await artifactStore.readArtifact(record, record.whiteboard.current, options.rootDir);
-        addMessage(record, 'user', text, now);
-        addMessage(record, 'assistant', `${artifact.summary}\n当前共 ${artifact.scenes.length} 幕，按内容顺序安排为：${artifact.scenes.map((scene, index) => `${index + 1}. ${scene.title}`).join('；')}。${record.message}。本次讨论保留当前版本和待确认状态。`, now);
-        if (payload.requestId) (record.whiteboard.actionReceipts ||= []).push({ requestId: payload.requestId, requestHash, action: 'message', acceptedAt: now });
-        return false;
-      } else payload = { ...payload, action: record.whiteboard.media?.gate && payload.sceneId ? 'revise_media' : 'revise' };
     }
     if (!actionsFor(record).some(action => action.id === payload.action)) throw new WhiteboardError('ACTION_NOT_ALLOWED', '当前阶段不允许此操作，请等待执行结束或刷新任务。', 409);
     if (record.whiteboard.media && !record.whiteboard.media.stale && ['update_plan', 'revise'].includes(payload.action)
@@ -258,7 +246,7 @@ async function actOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) {
       ? normalizeProductionPlan({ ...latest.productionPlan, ...(payload.productionPlan || {}) }) : latest.productionPlan;
     if (payload.action === 'update_plan') {
       const previous = await artifactStore.readArtifact(record, current, options.rootDir);
-      if (input.opening && !input.opening.question && !previous.opening) {
+      if (input.opening?.mode === 'question' && !input.opening.question && previous.opening?.mode !== 'question') {
         throw new WhiteboardError('INVALID_OPENING', '请填写开场问题后保存；自动拟定问题请在创建任务时选择提问模式。');
       }
     }
@@ -294,14 +282,21 @@ async function buildDialogContext(record, options) {
     progressMessage: record.message || '',
     opening: artifact?.opening || null,
     lastError: record.error?.message || '',
+    mediaIdentity: media ? mediaStore.mediaIdentity(media) : '',
+    messages: (record.whiteboard.messages || []).slice(-8).map(({ role, text }) => ({ role, text })),
     scenes: (artifact?.scenes || []).map((scene, index) => ({
       index: index + 1, id: scene.id, title: scene.title,
+      ...(media ? scenePrompt(media, scene) : {}),
+      lastError: media?.attempts?.findLast(attempt => attempt.sceneId === scene.id && attempt.stage === 'lineart_generation')?.errorCode || '',
       hasLineart: Boolean(media?.lineart?.[scene.id]),
       hasAnnotation: Boolean(media?.annotations?.[scene.id]),
       hasVideo: Boolean(media?.scenes?.[scene.id]),
     })),
     canReviseScenes: allowed.some(item => item.id === 'revise_media'),
     canRevisePlan: allowed.some(item => item.id === 'revise'),
+    canEditLineartPrompts: allowed.some(item => item.id === 'save_lineart_prompt'),
+    canRegenerateLineart: !busy && !media?.executionId && record.status !== 'unknown_external_outcome'
+      && allowed.some(item => item.id === 'save_lineart_prompt') && media.stage !== 'full_narration',
   };
 }
 
@@ -312,21 +307,61 @@ async function chatOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) 
   const text = String(payload.message || '').trim();
   if (!text || text.length > 6000) throw new WhiteboardError('INVALID_INPUT', '请输入有效消息，最多 6000 个字符。');
 
-  // 精确确认语与按钮语义等价，无需模型判断，直接走既有消息分支。
-  if (/^(确认|通过)(当前|本版|这版)?(方案|内容与制作方案|旁白|线稿|标注|当前产物|成片|视频)[。！!\s]*$/u.test(text)) {
-    return actOnWhiteboardWorkflow(workflowId, { ...payload, action: 'message', message: text }, options);
+  const requestHash = sha256(payload);
+  if (payload.requestId) {
+    if (typeof payload.requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,80}$/.test(payload.requestId)) throw new WhiteboardError('INVALID_INPUT', '操作请求标识无效。');
+    const previous = record.whiteboard.actionReceipts?.find(item => item.requestId === payload.requestId);
+    if (previous) {
+      if (previous.requestHash !== requestHash) throw new WhiteboardError('REQUEST_CONFLICT', '同一请求标识不能用于不同操作。', 409);
+      return { success: true, workflow_id: workflowId, workflow: await getView(record, options), startTask: false };
+    }
   }
+  assertExpectedVersion(record, payload);
+  const context = await buildDialogContext(record, options);
+  const intent = await agentRouter.classifyIntent({
+    message: text, context, services: options.services,
+    onRequest: ({ repair } = {}) => onEvent({ type: 'chat_phase', phase: repair ? 'repair' : 'intent' }),
+  });
+  onEvent({ type: 'chat_intent', action: intent.action, sceneIds: intent.sceneIds || [] });
 
-  let context = null;
-  let intent = null;
-  try {
-    context = await buildDialogContext(record, options);
-    intent = await agentRouter.classifyIntent({
-      message: text, context, services: options.services,
-      onRequest: () => onEvent({ type: 'chat_phase', phase: 'intent' }),
+  if (intent.action === 'edit_lineart_prompts') {
+    const { record: persisted, result: startTask } = await mutate(workflowId, options, async (current, now) => {
+      const previous = current.whiteboard.actionReceipts?.find(item => item.requestId === payload.requestId);
+      if (previous) {
+        if (previous.requestHash !== requestHash) throw new WhiteboardError('REQUEST_CONFLICT', '同一请求标识不能用于不同操作。', 409);
+        return false;
+      }
+      assertExpectedVersion(current, payload);
+      if (!actionsFor(current).some(action => action.id === 'save_lineart_prompt')
+        || ['queued', 'running'].includes(current.status) || current.whiteboard.media?.executionId) {
+        throw new WhiteboardError('ACTION_NOT_ALLOWED', '任务状态已变化，请等待执行结束后重新发送要求。', 409);
+      }
+      if (mediaStore.mediaIdentity(current.whiteboard.media) !== context.mediaIdentity) {
+        throw new WhiteboardError('STALE_IDENTITY', '媒体或提示词已变化，请刷新任务后重新发送要求。', 409);
+      }
+      // 同一文件队列内应用全部编辑，再启动一次任务；任何校验失败都不落盘。
+      addMessage(current, 'user', text, now);
+      for (const edit of intent.edits) {
+        const scene = context.scenes.find(scene => scene.id === edit.sceneId);
+        await production.act(current, { action: 'save_lineart_prompt', ...edit, expectedPromptIdentity: scene.identity }, options, now);
+      }
+      const regenerate = intent.regenerate && context.canRegenerateLineart;
+      if (regenerate) {
+        if (!actionsFor(current).some(action => action.id === 'retry_media')) throw new WhiteboardError('ACTION_NOT_ALLOWED', '提示词未产生可重新制作的改动，请补充具体修改要求。', 409);
+        await production.act(current, { action: 'retry_media', expectedMediaIdentity: mediaStore.mediaIdentity(current.whiteboard.media),
+          interactionId: current.whiteboard.media.interactionId }, options, now);
+      }
+      const names = intent.sceneIds.map(id => `「${context.scenes.find(scene => scene.id === id).title}」`).join('、');
+      addMessage(current, 'assistant', `已调整并保存${names}的线稿提示词。${regenerate
+        ? '已安排重新生成，其他有效分镜和旁白会复用；生成结果将在任务中更新。'
+        : current.status === 'unknown_external_outcome' ? '外部结果仍待核实，请先核实并使用“核实后授权新请求”继续。'
+          : intent.regenerate ? '当前阶段不能自动重新生成，请使用当前阶段的制作操作继续。' : '尚未重新生成，可以继续提出修改要求或点击继续制作。'}`, now);
+      if (payload.requestId) (current.whiteboard.actionReceipts ||= []).push({ requestId: payload.requestId, requestHash, action: intent.action, acceptedAt: now });
+      return regenerate;
     });
-  } catch { intent = null; }
-  onEvent({ type: 'chat_intent', action: intent?.action || 'legacy', sceneIds: intent?.sceneIds || [] });
+    onEvent({ type: 'chat_done', handled: intent.action, startTask });
+    return { success: true, workflow_id: workflowId, workflow: await getView(persisted, options), startTask };
+  }
 
   if (intent?.action === 'answer') {
     let answerText = '';
@@ -340,9 +375,15 @@ async function chatOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) 
       answerText = `抱歉，这次没能生成回答：${error.message || '未知错误'}。你可以稍后重试，或使用界面按钮继续操作。`;
     }
     const { record: persisted } = await mutate(workflowId, options, (current, now) => {
+      const previous = payload.requestId && current.whiteboard.actionReceipts?.find(item => item.requestId === payload.requestId);
+      if (previous) {
+        if (previous.requestHash !== requestHash) throw new WhiteboardError('REQUEST_CONFLICT', '同一请求标识不能用于不同操作。', 409);
+        return;
+      }
       addMessage(current, 'user', text, now);
       addMessage(current, 'assistant', answerText, now);
       current.updated_at = now;
+      if (payload.requestId) (current.whiteboard.actionReceipts ||= []).push({ requestId: payload.requestId, requestHash, action: 'answer', acceptedAt: now });
     });
     onEvent({ type: 'chat_done', handled: 'answer' });
     return { success: true, workflow_id: workflowId, workflow: await getView(persisted, options), startTask: false };
@@ -355,13 +396,12 @@ async function chatOnWhiteboardWorkflow(workflowId, payload = {}, options = {}) 
       message: intent.instruction,
       sceneId: intent.sceneIds?.[0] || payload.sceneId,
       sceneIds: intent.sceneIds,
-    }, options);
+    }, { ...options, chatRequestHash: requestHash });
     onEvent({ type: 'chat_done', handled: intent.action, startTask: result.startTask });
     return result;
   }
 
-  // 意图理解不可用（模型未配置或请求失败）：降级到既有正则路由，保证功能可用。
-  return actOnWhiteboardWorkflow(workflowId, { ...payload, action: 'message', message: text }, options);
+  throw new WhiteboardError('INTENT_CLASSIFICATION_FAILED', '未能理解本次要求，请补充说明后重试。');
 }
 
 async function runWhiteboardWorkflow(workflowId, options = {}) {
@@ -405,7 +445,7 @@ async function runWhiteboardWorkflow(workflowId, options = {}) {
     await options.taskContext?.emit?.({ type: 'stage_started', stage: 'content_plan', progress: 20, message: '正在整理白板内容、分镜和制作方案...' });
     const candidate = attempt.kind === 'settings' ? {
       schemaVersion: 1, title: previousArtifact.title, summary: previousArtifact.summary,
-      ...(attempt.input.opening ? { openingQuestion: attempt.input.opening.question || previousArtifact.opening?.question } : {}),
+      ...(attempt.input.opening?.mode === 'question' ? { openingQuestion: attempt.input.opening.question || previousArtifact.opening?.question } : {}),
       cues: previousArtifact.cues.map(({ id, text }) => ({ id, text })),
       scenes: previousArtifact.scenes.map(({ id, title, cueIds, imagePrompt, imageTexts }) => ({ id, title, cueIds, imagePrompt,
         ...(imageTexts ? { imageTexts } : {}) })),
@@ -448,7 +488,7 @@ async function runWhiteboardWorkflow(workflowId, options = {}) {
       record.updated_at = now;
       setStage(record, 'content_plan', 'done', '当前方案已通过结构与输入校验。', now);
       setStage(record, 'initial_approval', 'waiting_approval', '等待你确认当前内容与制作方案。', now);
-      addMessage(record, 'assistant', `第 ${active.number} 版内容与制作方案已整理完成。${artifact.summary}\n请检查方案中的${artifact.opening ? '开场问题、' : ''}正文、分镜与制作设置；你可以提出修改意见，或确认当前方案。`, now, attempt.id);
+      addMessage(record, 'assistant', `第 ${active.number} 版内容与制作方案已整理完成。${artifact.summary}\n请检查方案中的${artifact.opening ? '视频开头、' : ''}正文、分镜与制作设置；你可以提出修改意见，或确认当前方案。`, now, attempt.id);
       const interaction = { id: crypto.randomUUID(), kind: 'plan_review', stage: 'initial_approval', status: 'pending',
         title: `请确认第 ${active.number} 版内容与制作方案`, expectedAttemptId: attempt.id, expectedIdentity: binding.identity,
         createdAt: now, summary: artifact.summary };

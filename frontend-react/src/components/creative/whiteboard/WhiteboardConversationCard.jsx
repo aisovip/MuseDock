@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button.jsx';
 import { ProductionPlanFields } from './WhiteboardInputFields.jsx';
 import { whiteboardCanvasLabel, subtitleStyleLabel, validateSubtitleSettings } from './whiteboardForm.js';
 import { QuestionOpeningFields } from '../shared/QuestionOpeningFields.jsx';
-import { openingFormValue, validateOpening } from '../shared/openingForm.js';
+import { openingFormValue, validateOpening, openingLabel } from '../shared/openingForm.js';
 
 export function WhiteboardConversationCard({ interaction, active, artifact, disabled, allowed, onConfirm, onUpdatePlan }) {
   const [editing, setEditing] = useState(false);
@@ -26,7 +26,7 @@ export function WhiteboardConversationCard({ interaction, active, artifact, disa
       {interaction.summary ? <p className="m-0 text-xs leading-6 text-fg-3">{interaction.summary}</p> : null}
       {pending && plan && artifact ? <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
         <dt className="text-fg-3">制作规模</dt><dd className="m-0">{artifact.scenes.length} 幕正文 · 约 {Math.round(artifact.durationMs / 1000)} 秒{artifact.opening ? `，另加约 ${Math.ceil(artifact.opening.estimatedDurationMs / 1000)} 秒开场` : ''}</dd>
-        {artifact.opening ? <><dt className="text-fg-3">提问开场</dt><dd className="m-0 break-words">{artifact.opening.question}<span className="mt-1 block text-fg-3">卡片叠放 · 全部成品图片</span></dd></> : null}
+        {artifact.opening ? <><dt className="text-fg-3">视频开头</dt><dd className="m-0 break-words">{openingLabel(artifact.opening)}{artifact.opening.question ? <span className="mt-1 block text-fg-3">{artifact.opening.question}</span> : null}</dd></> : null}
         <dt className="text-fg-3">视频画幅</dt><dd className="m-0">{whiteboardCanvasLabel(artifact.aspectRatio)} · {artifact.canvas?.width || 1920} × {artifact.canvas?.height || 1080}</dd>
         <dt className="text-fg-3">视觉模板</dt><dd className="m-0">{artifact.visualStyle.displayName}</dd>
         <dt className="text-fg-3">旁白</dt><dd className="m-0">{artifact.productionPlan.narrationMode === 'disabled' ? (artifact.timingKind === 'source_srt' ? '无旁白，使用 SRT 时间轴' : '无旁白，使用计划时间轴') : artifact.narrationService?.displayName || '未配置'}</dd>

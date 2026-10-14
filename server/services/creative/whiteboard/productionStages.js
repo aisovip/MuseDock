@@ -11,7 +11,7 @@ const { sceneRenderPool } = require('./sceneRenderPool');
 const { annotationPool } = require('./annotationPool');
 const { imagePool } = require('./imagePool');
 const { scenePrompt } = require('./lineartPrompts');
-const { narrationScenes } = require('../shared/videoOpening');
+const { narrationScenes, narrationOpeningDurationMs } = require('../shared/videoOpening');
 
 async function fspExists(file) { try { await fsp.access(file); return true; } catch { return false; } }
 
@@ -81,7 +81,7 @@ async function narrationStage(ctx, artifact) {
       await ctx.requesting(item.id);
       const result = await (ctx.services.aiTtsModel || aiTtsModel).callTtsModel({
         text: artifact.narrationText, language: artifact.narrationLanguage,
-        durationSeconds: (artifact.durationMs + (artifact.opening?.estimatedDurationMs || 0)) / 1000,
+        durationSeconds: (artifact.durationMs + narrationOpeningDurationMs(artifact)) / 1000,
         scenes: narrationScenes(artifact),
         ttsConfig: { ...ctx.voice.runtime, enabled: true }, env: {}, nativeWordSubtitles: true,
         maxRetries: 0, requestTimeoutMs: 180000, fetchImpl: ctx.services.fetchImpl, signal: ctx.processOptions.signal,
@@ -508,16 +508,18 @@ async function finalStage(ctx, artifact, timing) {
   const sceneFiles = [];
   let openingReceipt;
   if (timing.opening) {
-    await ctx.emitProgress?.({ type: 'stage_progress', stage: 'final_delivery', message: '正在制作提问开场，依次叠放全部成品图片...' });
+    await ctx.emitProgress?.({ type: 'stage_progress', stage: 'final_delivery', message: timing.opening.mode === 'image-montage'
+      ? '正在制作图片汇总开头，快速切图并汇成图片墙...' : '正在制作提问开场，依次叠放全部成品图片...' });
     const images = [];
     for (const entry of openingImages) images.push(await ctx.filePath(record, entry.image));
     const output = path.join(directory, 'opening.mp4');
-    openingReceipt = await ctx.tools.renderOpening({ images, output, question: timing.opening.question, endMs: timing.opening.endMs }, ctx.runtime, ctx.processOptions);
+    openingReceipt = await ctx.tools.renderOpening({ images, output, mode: timing.opening.mode, question: timing.opening.question, endMs: timing.opening.endMs }, ctx.runtime, ctx.processOptions);
     sceneFiles.push(output);
   }
   for (const scene of timing.scenes) sceneFiles.push(await ctx.filePath(record, media.scenes[scene.id].video));
   const audioFile = media.current.full_narration.audio ? await ctx.filePath(record, media.current.full_narration.audio) : null;
-  const validation = await ctx.tools.finalVideo({ sceneFiles, audioFile, bgm, cues: timing.opening ? captions.filter(cue => cue.sourceCueId !== timing.opening.cueId) : captions, subtitleStyle,
+  const validation = await ctx.tools.finalVideo({ sceneFiles, audioFile, audioOffsetMs: timing.audioOffsetMs || 0, bgm,
+    cues: timing.opening?.cueId ? captions.filter(cue => cue.sourceCueId !== timing.opening.cueId) : captions, subtitleStyle,
     durationMs: timing.durationMs, directory, burnSubtitles: artifact.productionPlan.burnSubtitles }, ctx.runtime, ctx.processOptions);
   const subtitles = path.join(directory, 'final.srt');
   await fsp.writeFile(subtitles, srtText(captions), { flag: 'wx' });
@@ -531,7 +533,7 @@ async function finalStage(ctx, artifact, timing) {
     poster: { path: poster, kind: 'final_poster', name: '成片预览', mime: 'image/png' },
     subtitles: { path: subtitles, kind: 'final_subtitles', name: '成片字幕', mime: 'application/x-subrip' },
     receipt: { path: receipt, kind: 'technical_validation', name: '技术验证记录', mime: 'application/json' },
-    ...(openingReceipt ? { openingVideo: { path: path.join(directory, 'opening.mp4'), kind: 'opening_video', name: '提问开场', mime: 'video/mp4' } } : {}),
+    ...(openingReceipt ? { openingVideo: { path: path.join(directory, 'opening.mp4'), kind: 'opening_video', name: timing.opening.mode === 'image-montage' ? '图片汇总开头' : '提问开场', mime: 'video/mp4' } } : {}),
   }, (current, published) => {
     current.whiteboard.media.current.final_delivery = store.bind({ kind: 'final_video', inputIdentity: item.inputIdentity,
       ...published, validation, ...subtitleBinding, ...bgmBinding, ...openingIdentity, narrationIdentity: media.current.full_narration.identity, sceneBundleIdentity: media.current.scene_render.identity });

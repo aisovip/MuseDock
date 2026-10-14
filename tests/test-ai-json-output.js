@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { callTextModel } = require('../server/services/ai/aiTextModel');
 const { runWithApiCallContext } = require('../server/services/diagnostics/apiCallRecorder');
+const { isolatedConfigPath } = require('./isolated-ai-config');
 
 const schema = { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } };
 const protocols = ['openai-responses', 'openai-chat-completions', 'anthropic-messages'];
@@ -12,7 +13,7 @@ const reply = protocol => protocol === 'anthropic-messages'
   : protocol === 'openai-chat-completions' ? { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] }
     : { output_text: '{"ok":true}', status: 'completed' };
 const call = (protocol, options) => runWithApiCallContext({ store: { start: () => null } }, () => callTextModel({
-  textConfig: config(protocol), messages: [{ role: 'user', content: '返回 JSON 对象' }],
+  configPath: isolatedConfigPath, textConfig: config(protocol), messages: [{ role: 'user', content: '返回 JSON 对象' }],
   maxRetries: 0, retryDelayMs: 1, ...options,
 }));
 function checkFormat(body, protocol, outputFormat) {

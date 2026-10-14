@@ -10,9 +10,10 @@ async function run() {
 
   // Test 1: empty config returns default structure
   const initial = await aiModelConfig.getPublicConfig({ configPath });
-  assert.deepStrictEqual(Object.keys(initial), ['providers', 'active', 'skipValidation', 'localAsr', 'localFireRed']);
+  assert.deepStrictEqual(Object.keys(initial), ['providers', 'active', 'skipValidation', 'analysisStreaming', 'localAsr', 'localFireRed']);
   assert.deepStrictEqual(initial.providers, {});
   assert.strictEqual(initial.skipValidation, false);
+  assert.strictEqual(initial.analysisStreaming, false);
   for (const type of aiModelConfig.MODEL_TYPES) {
     assert.strictEqual(initial.active[type], type === 'asr' ? aiModelConfig.BUILTIN_FIRERED_REF : '');
   }
@@ -55,6 +56,7 @@ async function run() {
       multimodal: 'openai/multimodal',
     },
     skipValidation: true,
+    analysisStreaming: true,
   }, { configPath });
 
   // Verify public config masks API keys
@@ -71,6 +73,8 @@ async function run() {
   assert.strictEqual(saved.active.text, 'mimo/text');
   assert.strictEqual(saved.active.multimodal, undefined);
   assert.strictEqual(saved.skipValidation, true);
+  assert.strictEqual(saved.analysisStreaming, true);
+  assert.strictEqual(await aiModelConfig.getAnalysisStreaming({ configPath }), true);
 
   // Verify raw storage preserves API keys
   const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -85,9 +89,11 @@ async function run() {
   assert.strictEqual(textRuntime.baseUrl, 'https://api.xiaomimimo.com/v1');
   assert.strictEqual(textRuntime.modelId, 'mimo-v2.5-pro');
   assert.strictEqual(textRuntime.supportsMultimodal, false);
+  assert.strictEqual(textRuntime.analysisStreaming, true);
 
   const ttsRuntime = await aiModelConfig.getRuntimeConfig('tts', { configPath });
   assert.strictEqual(ttsRuntime.provider, 'mimo');
+  assert.strictEqual(ttsRuntime.analysisStreaming, undefined);
   assert.strictEqual(ttsRuntime.modelId, 'mimo-v2.5-tts');
   assert.strictEqual(ttsRuntime.voiceId, 'Chinese_deep_voiced_male_nv1');
   assert.strictEqual(ttsRuntime.ttsConcurrency, 2);
@@ -125,6 +131,11 @@ async function run() {
   assert.strictEqual(afterUpdate.providers.openai.apiKey, 'sk-openai-secret-1234'); // blank key preserves old
   assert.strictEqual(afterUpdate.providers.openai.protocol, 'openai-responses');
   assert.strictEqual(afterUpdate.active.text, 'openai/text');
+  assert.strictEqual(updated.analysisStreaming, true, '旧客户端省略开关时保留已保存值');
+  await aiModelConfig.saveConfig({ ...afterUpdate, analysisStreaming: false }, { configPath });
+  assert.strictEqual(await aiModelConfig.getAnalysisStreaming({ configPath }), false);
+  assert.strictEqual((await aiModelConfig.getRuntimeConfig('text', { configPath })).analysisStreaming, false);
+  assert.strictEqual(aiModelConfig.normalizeStoredConfig({ analysisStreaming: 'true' }).analysisStreaming, false);
 
   // Test 6: getSkipValidation
   const skipVal = await aiModelConfig.getSkipValidation({ configPath });
@@ -139,6 +150,7 @@ async function run() {
     },
   }));
   const migrated = await aiModelConfig.getPublicConfig({ configPath: oldConfigPath });
+  assert.strictEqual(migrated.analysisStreaming, false);
   assert.strictEqual(Object.keys(migrated.providers).length, 1);
   const migProvider = migrated.providers[Object.keys(migrated.providers)[0]];
   assert.strictEqual(migProvider.models.text.enabled, true);

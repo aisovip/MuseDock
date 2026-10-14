@@ -8,7 +8,8 @@ export function QuestionOpeningFields({ value = { mode: 'disabled', question: ''
   const error = validateOpening(value, { allowEmpty });
   return <div className="grid gap-3">
     <LabeledSelect label="视频开头" value={value.mode} disabled={disabled} onChange={mode => onChange({ ...value, mode })}
-      options={[{ id: 'disabled', label: '直接开始正文' }, { id: 'question', label: '提问模式 · 卡片叠放' }]} />
+      options={[{ id: 'disabled', label: '直接开始正文' }, { id: 'question', label: '提问模式 · 卡片叠放' }, { id: 'image-montage', label: '图片汇总 · 无新增文字' }]} />
+    {value.mode === 'image-montage' ? <p className="m-0 text-xs leading-6 text-fg-3">用全部成品图制作 3 秒开头：快速切图后汇成图片墙，再进入正文。不添加文字或开场配音，保留图片自身的文字。</p> : null}
     {value.mode === 'question' ? <>
       <div className="grid gap-1.5 text-xs font-semibold text-fg-2">
         <label htmlFor={id}>开场问题{allowEmpty ? '（可选）' : ''}</label>

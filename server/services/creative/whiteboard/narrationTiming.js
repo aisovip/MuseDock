@@ -1,7 +1,15 @@
 const { WhiteboardError, sha256, subtitleStyleFor } = require('./contracts');
 
 const { CAPTION_LAYOUT_VERSION, letters, splitCaption, srtText } = require('../shared/captionLayout');
-const { OPENING_CUE_ID, narrationCues } = require('../shared/videoOpening');
+const { OPENING_CUE_ID, narrationCues, hasQuestionOpening, IMAGE_OPENING_DURATION_MS } = require('../shared/videoOpening');
+
+function prependImageOpening(timing, opening) {
+  const offset = IMAGE_OPENING_DURATION_MS;
+  const shift = item => ({ ...item, startMs: item.startMs + offset, endMs: item.endMs + offset });
+  return { ...timing, audioDurationMs: timing.durationMs, audioOffsetMs: offset, durationMs: timing.durationMs + offset,
+    opening: { ...opening, startMs: 0, endMs: offset },
+    cues: timing.cues.map(shift), captions: timing.captions.map(shift), scenes: timing.scenes.map(shift) };
+}
 
 function captionText(text) { return text.replace(/\s+/gu, ' ').trim(); }
 
@@ -32,7 +40,7 @@ function buildNarrationTiming(artifact, evidence, durationMs, { fontSize = null,
   const characters = wordCharacters(evidence, durationMs);
   const sourceLetters = letters(artifact.narrationText).join('');
   if (characters.map(item => item.character).join('') !== sourceLetters) {
-    if (artifact.opening && characters.map(item => item.character).join('') === letters(artifact.cues.map(cue => cue.text).join('')).join('')) {
+    if (hasQuestionOpening(artifact) && characters.map(item => item.character).join('') === letters(artifact.cues.map(cue => cue.text).join('')).join('')) {
       throw new WhiteboardError('NARRATION_TEXT_MISMATCH', '完整旁白缺少已确认的提问开场，现有音频只包含正文。音频已保留，请检查后决定是否重新生成完整旁白。');
     }
     throw new WhiteboardError('NARRATION_TEXT_MISMATCH', '完整旁白的原生字幕与已确认正文不一致。音频已保留，请检查后决定是否重新生成。');
@@ -58,7 +66,7 @@ function buildNarrationTiming(artifact, evidence, durationMs, { fontSize = null,
 
 function materializeTiming(artifact, cueTimings, captions, durationMs, provider, minSceneDurationMs = 800) {
   const byId = new Map(cueTimings.map(cue => [cue.id, cue]));
-  const question = artifact.opening ? byId.get(OPENING_CUE_ID) : null;
+  const question = hasQuestionOpening(artifact) ? byId.get(OPENING_CUE_ID) : null;
   const opening = question ? { ...artifact.opening, cueId: OPENING_CUE_ID, startMs: 0,
     endMs: Math.round((question.endMs + byId.get(artifact.cues[0].id).startMs) / 2) } : null;
   let startMs = opening?.endMs || 0;
@@ -70,16 +78,18 @@ function materializeTiming(artifact, cueTimings, captions, durationMs, provider,
     startMs = endMs;
     return result;
   });
-  return { schemaVersion: 1, captionLayoutVersion: CAPTION_LAYOUT_VERSION,
+  const timing = { schemaVersion: 1, captionLayoutVersion: CAPTION_LAYOUT_VERSION,
     timingKind: provider === 'disabled' ? 'source_srt' : 'provider_native_words', provider,
     durationMs, sourceTextSha256: sha256(artifact.narrationText), cues: cueTimings, captions, scenes,
     ...(opening ? { opening } : {}) };
+  return artifact.opening?.mode === 'image-montage' ? prependImageOpening(timing, artifact.opening) : timing;
 }
 
 function buildSilentTiming(artifact, { fontSize = null, referenceOnly = false } = {}) {
   if (artifact.opening) {
     const { opening, ...body } = artifact;
     const timing = buildSilentTiming(body, { fontSize, referenceOnly });
+    if (opening.mode === 'image-montage') return prependImageOpening(timing, opening);
     const offset = opening.estimatedDurationMs;
     const shift = item => ({ ...item, startMs: item.startMs + offset, endMs: item.endMs + offset });
     const parts = splitCaption(opening.question, artifact.narrationLanguage, artifact.aspectRatio, fontSize);
@@ -156,7 +166,7 @@ function buildDisplayCaptions(artifact, timing, fontSize, evidence) {
   let display;
   if (timing.timingKind === 'provider_native_words') {
     if (!evidence) throw new WhiteboardError('NARRATION_EVIDENCE_INVALID', '调整字幕字号需要已保存的同次原生字幕，请先检查旁白产物。');
-    display = buildNarrationTiming(artifact, evidence, timing.durationMs, { fontSize });
+    display = buildNarrationTiming(artifact, evidence, timing.audioDurationMs ?? timing.durationMs, { fontSize });
   } else {
     display = buildSilentTiming(artifact.opening ? artifact : { ...artifact, cues: timing.cues, scenes: timing.scenes, durationMs: timing.durationMs,
       timingKind: timing.timingKind === 'planned' ? 'provisional' : timing.timingKind }, { fontSize });

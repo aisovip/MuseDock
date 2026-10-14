@@ -98,9 +98,16 @@ function createTranscriptionService(options = {}) {
       frames: (job.frames || []).map(frame => ({ ...frame, ...files[frame.kind] })),
       frameSampling: job.frameSampling || null,
       createdAt: job.createdAt, updatedAt: job.updatedAt, error: job.error || null,
-      result: job.result || null, canRetryCorrection: job.status === 'partial' && job.stage === 'correcting',
+      result: job.result || null, canCorrect: canStartCorrection(job),
+      canRetryCorrection: job.status === 'partial' && job.stage === 'correcting',
       files,
     };
+  }
+
+  function canStartCorrection(job) {
+    return job.status === 'succeeded' && !!job.result?.sentences?.length
+      && !!job.files?.rawJson && !!job.files?.rawText && !!job.files?.rawSrt
+      && !job.result.correctedText && !job.files.correctedText;
   }
 
   function jobTitle(job) {
@@ -429,7 +436,7 @@ function createTranscriptionService(options = {}) {
       }
     }
     const message = job.result?.status === 'no_speech_detected' ? '未检测到可转写的人声，已保留音频与检测结果。'
-      : job.autoCorrect ? `转写和校订完成，共校订 ${job.correctionCount} 条字幕。` : '转写完成，原始文本和字幕已保存。';
+      : job.result?.correctedText ? `转写和校订完成，共校订 ${job.correctionCount} 条字幕。` : '转写完成，原始文本和字幕已保存。';
     Object.assign(job, { status: 'succeeded', stage: 'done', progress: 100,
       message: `${message}${job.extractFrames ? ` 已保存 ${job.frames.length} 张截图。` : ''}` });
     await save(job);
@@ -531,6 +538,30 @@ function createTranscriptionService(options = {}) {
     });
   }
 
+  async function beginCorrection(id, retry) {
+    const job = await load(id);
+    assertAvailable(id);
+    const eligible = retry ? job.status === 'partial' && job.stage === 'correcting' : canStartCorrection(job);
+    if (creating || running.size || editing.has(id) || !eligible) {
+      throw new TranscriptionError(retry ? 'CORRECTION_NOT_RETRYABLE' : 'CORRECTION_NOT_AVAILABLE',
+        retry ? '该任务当前不能重试校订，请等待运行结束。' : '该任务当前不能发起校订，请等待原始转写完成；已有校订版可直接修改。', 409);
+    }
+    creating = true;
+    try {
+      const text = await (options.getTextConfig || aiModelConfig.getRuntimeConfig)('text', options);
+      if (!textConfigured(text)) throw new TranscriptionError('TEXT_NOT_CONFIGURED', '请先在设置中配置并选择分析模型。');
+      await verifiedFile(job, 'rawJson');
+      await verifiedFile(job, 'rawText');
+      await verifiedFile(job, 'rawSrt');
+      await setStage(job, 'correcting', 80, retry ? '正在重新校订已保存的原始转写...' : '正在校订已保存的原始转写...');
+      launch(job, async () => {
+        await correct(job, text);
+        await finish(job);
+      });
+      return present(job);
+    } finally { creating = false; }
+  }
+
   return {
     list,
     remove,
@@ -571,23 +602,8 @@ function createTranscriptionService(options = {}) {
     },
     async get(id) { return present(await load(id)); },
     async file(id, kind) { return verifiedFile(await load(id), kind); },
-    async retryCorrection(id) {
-      const job = await load(id);
-      if (creating || running.size || editing.has(id) || deleting.has(id) || deleted.has(id) || job.status !== 'partial' || job.stage !== 'correcting') {
-        throw new TranscriptionError('CORRECTION_NOT_RETRYABLE', '该任务当前不能重试校订，请等待运行结束。', 409);
-      }
-      creating = true;
-      try {
-        const text = await (options.getTextConfig || aiModelConfig.getRuntimeConfig)('text', options);
-        if (!textConfigured(text)) throw new TranscriptionError('TEXT_NOT_CONFIGURED', '请先在设置中配置并选择分析模型。');
-        await setStage(job, 'correcting', 80, '正在重新校订已保存的原始转写...');
-        launch(job, async () => {
-          await correct(job, text);
-          await finish(job);
-        });
-        return present(job);
-      } finally { creating = false; }
-    },
+    async startCorrection(id) { return beginCorrection(id, false); },
+    async retryCorrection(id) { return beginCorrection(id, true); },
     async waitForIdle() { await Promise.allSettled([...running.values()]); },
   };
 }

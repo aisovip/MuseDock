@@ -62,6 +62,7 @@ export function buildWhiteboardPayload(draft) {
       narrationLanguage: draft.narrationLanguage, visualStylePreset: draft.visualStylePreset,
       aspectRatio: draft.aspectRatio || '16:9',
       ...(draft.opening?.mode === 'question' ? { opening: { mode: 'question', question: (draft.opening.question || '').trim() } } : {}),
+      ...(draft.opening?.mode === 'image-montage' ? { opening: { mode: 'image-montage' } } : {}),
       ...(draft.inputMode === 'srt' ? {} : {
         rewritePolicy: draft.inputMode === 'topic' ? 'generate' : draft.rewritePolicy,
         targetDurationSeconds: Number(draft.targetDurationSeconds),

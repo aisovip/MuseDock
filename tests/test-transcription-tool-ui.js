@@ -29,6 +29,8 @@ async function run() {
   const openRequests = [];
   const deleteRequests = [];
   const saveRequests = [];
+  const correctionRequests = [];
+  let correctionFailure = false;
   let saveFailure = false;
   let deleteFailure = false;
   let fileOpenFailure = false;
@@ -64,6 +66,7 @@ async function run() {
       job.message = req.body.autoCorrect ? '转写和校订完成，共校订 1 条字幕。' : '转写完成，原始文本和字幕已保存。';
       job.result = { rawText: number === 1 ? '家向的月光。' : '窗钱的月光。', durationMs: 1600, sentenceCount: 1 };
       job.result.sentences = [{ index: 1, startMs: 100, endMs: 800, text: job.result.rawText }];
+      job.canCorrect = !req.body.autoCorrect;
       if (req.body.autoCorrect) {
         job.result.correctedText = '窗前的月光。'; job.correctionCount = 1;
         job.result.correctedSentences = [{ ...job.result.sentences[0], text: job.result.correctedText }];
@@ -121,6 +124,30 @@ async function run() {
       res.json({ success: true, data: job });
     }, 350);
   });
+  function requestCorrection(req, res) {
+    correctionRequests.push(req.params.id);
+    const fail = correctionFailure;
+    setTimeout(() => {
+      const job = jobs.get(req.params.id);
+      Object.assign(job, { status: 'running', stage: 'correcting', progress: 80,
+        canCorrect: false, canRetryCorrection: false, message: '正在调用分析模型校订...', updatedAt: new Date().toISOString() });
+      res.status(202).json({ success: true, data: job });
+      setTimeout(() => {
+        Object.assign(job, { status: fail ? 'partial' : 'succeeded', stage: fail ? 'correcting' : 'done',
+          progress: fail ? 80 : 100, updatedAt: new Date().toISOString(), canRetryCorrection: fail,
+          message: fail ? '分析模型校订失败，原始转写已保留，可单独重试校订。' : '转写和校订完成，共校订 1 条字幕。' });
+        if (fail) return;
+        job.result.correctedText = '家乡的月光。';
+        job.result.correctedSentences = job.result.sentences.map(cue => ({ ...cue, text: job.result.correctedText }));
+        job.correctionCount = 1;
+        for (const kind of ['correctedText', 'correctedSrt', 'corrections']) {
+          job.files[kind] = { name: `${kind}.txt`, url: `/api/transcriptions/${job.id}/files/${kind}` };
+        }
+      }, 600);
+    }, 350);
+  }
+  app.post('/api/transcriptions/:id/corrections', requestCorrection);
+  app.post('/api/transcriptions/:id/corrections/retry', requestCorrection);
   app.delete('/api/transcriptions/:id', (req, res) => {
     if (req.body?.confirmed !== true) return res.status(400).json({ success: false, message: '请先确认删除。' });
     deleteRequests.push(req.params.id);
@@ -235,6 +262,7 @@ async function run() {
     assert.equal(submissions[0].frameCount, null);
     assert.equal(await dialog.getByRole('region', { name: '视频截图', exact: true }).count(), 0);
     assert.equal(await dialog.getByRole('tab', { name: '校订版' }).isDisabled(), true);
+    assert.equal(await dialog.getByRole('button', { name: '校订', exact: true }).isEnabled(), true);
     await openResultFile('打开 SRT', 'fixture-1', 'rawSrt');
     fileOpenFailure = true;
     await dialog.getByRole('button', { name: '打开 TXT', exact: true }).click();
@@ -398,6 +426,31 @@ async function run() {
       })));
     }
     assert.ok(box.x >= 0 && box.x + box.width <= 391, '窄屏弹框不应溢出视口');
+
+    // 新建未选择校订的历史记录可按需校订，失败后仅重试校订。
+    await historyItem('fixture-1').click();
+    await dialog.getByRole('button', { name: '校订', exact: true }).waitFor();
+    correctionFailure = true;
+    await dialog.getByRole('button', { name: '校订', exact: true }).click();
+    assert.equal(await dialog.getByRole('button', { name: '正在提交校订...', exact: true }).isDisabled(), true);
+    assert.equal(await dialog.getByRole('button', { name: '新建转写', exact: true }).isDisabled(), true);
+    await dialog.getByText('正在调用分析模型校订...', { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('button', { name: '修改文本', exact: true }).isDisabled(), true);
+    await dialog.getByText('分析模型校订失败，原始转写已保留，可单独重试校订。', { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), '家向的月光。');
+    correctionFailure = false;
+    await dialog.getByRole('button', { name: '仅重试校订', exact: true }).click();
+    await dialog.getByText('转写和校订完成，共校订 1 条字幕。', { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('tab', { name: '校订版' }).getAttribute('aria-selected'), 'true');
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), '家乡的月光。');
+    assert.equal(await dialog.getByRole('button', { name: '校订', exact: true }).count(), 0);
+    await dialog.getByRole('tab', { name: '原始转写' }).click();
+    assert.equal(await dialog.getByRole('tabpanel').innerText(), '家向的月光。');
+    assert.deepEqual(correctionRequests, ['fixture-1', 'fixture-1']);
+    assert.equal(submissions.length, 2, '按需校订不能创建新的转写任务');
+    await openResultFile('打开 SRT', 'fixture-1', 'rawSrt');
+    await historyItem('fixture-2').click();
+    await dialog.getByRole('tabpanel').getByText('窗前的月光。', { exact: true }).waitFor();
 
     // 取消和 Escape 只关闭确认框，主弹框、当前记录及焦点都必须保留。
     const confirmation = page.getByRole('dialog', { name: '删除这条转写？', exact: true });

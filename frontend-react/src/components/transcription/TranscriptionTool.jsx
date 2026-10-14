@@ -119,11 +119,11 @@ export function TranscriptionTool({ compact = false }) {
     finally { submittingRef.current = false; setSubmitting(false); }
   }
 
-  async function retryCorrection() {
-    if (submittingRef.current || busy) return;
+  async function requestCorrection(retry = false) {
+    if (submittingRef.current || busy || navigationDisabled) return;
     submittingRef.current = true;
     setSubmitting(true); setError(''); setNotice('');
-    try { rememberJob((await api.retryTranscriptionCorrection(job.id)).data); }
+    try { rememberJob((await (retry ? api.retryTranscriptionCorrection(job.id) : api.correctTranscription(job.id))).data); }
     catch (cause) { setError(cause.message); }
     finally { submittingRef.current = false; setSubmitting(false); }
   }
@@ -317,7 +317,7 @@ export function TranscriptionTool({ compact = false }) {
                 <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${job.progress || 0}%` }} />
               </div>}
               {isRunning(job) && <p className="m-0 text-xs text-muted-foreground">切换历史或关闭弹框后任务继续运行。</p>}
-              {job.canRetryCorrection && <Button variant="outline" size="sm" onClick={retryCorrection} disabled={busy}>
+              {job.canRetryCorrection && <Button variant="outline" size="sm" onClick={() => requestCorrection(true)} disabled={busy || navigationDisabled}>
                 <RotateCw />{submitting ? '正在提交校订...' : '仅重试校订'}
               </Button>}
             </section>}
@@ -337,6 +337,10 @@ export function TranscriptionTool({ compact = false }) {
                 <TabsContent value="corrected"><pre className="m-0 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/20 p-3 font-sans text-sm leading-7">{job.result.correctedText}</pre></TabsContent>
               </Tabs>
               <div className="flex flex-wrap gap-2">
+                {job.canCorrect && <Button variant="outline" size="sm" onClick={() => requestCorrection()}
+                  disabled={busy || navigationDisabled || loading || !capabilities?.textReady}>
+                  {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Check />} {submitting ? '正在提交校订...' : '校订'}
+                </Button>}
                 <Button variant="outline" size="sm" onClick={editText}
                   disabled={navigationDisabled || isRunning(job) || !(version === 'raw' ? job.result.sentences : job.result.correctedSentences)?.length}>
                   <Pencil />修改文本
@@ -348,6 +352,10 @@ export function TranscriptionTool({ compact = false }) {
                 {job.files.rawJson && <Button variant="outline" size="sm" onClick={() => openFile('rawJson')} disabled={fileActions.opening}><FileText />打开原始转写 JSON</Button>}
                 {job.files.corrections && <Button variant="ghost" size="sm" onClick={() => openFile('corrections')} disabled={fileActions.opening}>打开校订记录</Button>}
               </div>
+              {job.canCorrect && !loading && !capabilities?.textReady && <p className="m-0 text-xs text-muted-foreground">
+                校订需要分析模型，请先在<Link to="/settings?section=models" state={{ from: window.location.pathname }}
+                  onClick={() => setOpen(false)} className="underline underline-offset-4">设置中心配置并选择分析模型</Link>。
+              </p>}
               {!!job.result.words?.length && job.result.correctedText && <p className="m-0 text-xs text-muted-foreground">字词时间点属于原始转写；文本校订没有重新进行音频对齐。</p>}
               {(job.result.rawEditedAt || job.result.correctedEditedAt) && <p className="m-0 text-xs text-muted-foreground">已保存人工修改，字幕时间轴保持不变；修改文字没有重新进行音频对齐。</p>}
               {job.result.rawModifiedAfterCorrection && <p className="m-0 text-xs text-muted-foreground">原始转写已修改，校订版未自动同步，请核对校订版内容。</p>}

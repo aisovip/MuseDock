@@ -7,6 +7,7 @@ const { WhiteboardError, sha256, canonicalJson, canvasFor, subtitleStyleFor } = 
 const store = require('./mediaStore');
 const mediaTools = require('./mediaTools');
 const { buildSilentTiming } = require('./narrationTiming');
+const { narrationOpeningDurationMs } = require('../shared/videoOpening');
 const { narrationStage, lineartStage, annotationStage, sceneStage, finalStage, reviewGate } = require('./productionStages');
 const aiTtsModel = require('../../ai/aiTtsModel');
 const appSettings = require('../../appSettings');
@@ -242,7 +243,7 @@ async function act(record, payload, options, now) {
       if (!service.configured || !['doubao', 'minimax'].includes(voice.provider)) throw new WhiteboardError('TTS_NOT_CONFIGURED', '完整白板旁白需要豆包 Seed Audio 或 MiniMax 原生字幕。请在设置中配置 TTS，再调整制作设置并重新确认方案。');
       if (artifact.narrationService.contractVersion === 2 && service.contractHash !== artifact.narrationService.contractHash) throw new WhiteboardError('VOICE_CONFIG_CHANGED', '旁白设置已变化，请更新制作设置并重新确认当前方案。', 409);
       if (artifact.narrationService.contractVersion !== 2 && artifact.narrationService.contractHash !== legacyContractHash) throw new WhiteboardError('VOICE_CONFIG_CHANGED', '旧方案的旁白设置已变化，请更新制作设置并重新确认。', 409);
-      if (voice.provider === 'doubao' && artifact.durationMs + (artifact.opening?.estimatedDurationMs || 0) > 120000) throw new WhiteboardError('TTS_INPUT_INVALID', '豆包整轨旁白最多支持 120 秒（含提问开场），请调整方案时长。');
+      if (voice.provider === 'doubao' && artifact.durationMs + narrationOpeningDurationMs(artifact) > 120000) throw new WhiteboardError('TTS_INPUT_INVALID', '豆包整轨旁白最多支持 120 秒（含提问开场），请调整方案时长。');
     }
     const config = await options.services.aiModelConfig.getRuntimeConfig('text');
     const image = await options.services.aiModelConfig.getRuntimeConfig('image');

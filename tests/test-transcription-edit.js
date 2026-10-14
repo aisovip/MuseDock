@@ -146,10 +146,46 @@ async function run() {
     await pending;
 
     const noCorrection = await create(false);
+    assert.equal(noCorrection.canCorrect, true, '仅转写完成后允许按需校订');
     await assert.rejects(service.updateText(noCorrection.id, edit(noCorrection, 'corrected', ['文字', '文字'])), error => error.code === 'TEXT_NOT_EDITABLE');
     const tamperedFile = (await service.file(noCorrection.id, 'rawText')).path;
     await fs.writeFile(tamperedFile, '外部篡改');
     await assert.rejects(service.updateText(noCorrection.id, edit(noCorrection, 'raw', ['测试修改', '照着小路。'])), error => error.code === 'ARTIFACT_CHANGED');
+    await assert.rejects(service.startCorrection(noCorrection.id), error => error.code === 'ARTIFACT_CHANGED');
+
+    const onDemand = await create(false);
+    const onDemandEdited = await service.updateText(onDemand.id, edit(onDemand, 'raw', ['按需校订使用的原文。', '照着小路。']));
+    assert.equal((await createTranscriptionService(options).get(onDemand.id)).canCorrect, true, '历史仅转写任务同样可校订');
+    const missingText = createTranscriptionService({ ...options, getTextConfig: async () => ({ enabled: false }) });
+    await assert.rejects(missingText.startCorrection(onDemand.id), error => error.code === 'TEXT_NOT_CONFIGURED');
+    assert.equal((await missingText.get(onDemand.id)).status, 'succeeded', '缺配置不能改变原任务状态');
+    assert.equal((await fetch(`${base}/${onDemand.id}/corrections`, { method: 'POST', headers: { Origin: 'https://example.invalid' } })).status, 403);
+    failCorrection = true;
+    const countsBeforeCorrection = [asrCalls, downloads];
+    const firstCorrection = await fetch(`${base}/${onDemand.id}/corrections`, { method: 'POST' });
+    assert.equal(firstCorrection.status, 202);
+    await service.waitForIdle();
+    const onDemandPartial = await service.get(onDemand.id);
+    assert.equal(onDemandPartial.status, 'partial');
+    assert.equal(onDemandPartial.canRetryCorrection, true);
+    assert.equal(onDemandPartial.canCorrect, false);
+    assert.equal(onDemandPartial.result.rawText, onDemandEdited.result.rawText);
+    assert.equal(modelInput.sentences[0].text, '按需校订使用的原文。');
+    failCorrection = false;
+    const retryOnDemand = await service.retryCorrection(onDemand.id);
+    assert.equal(retryOnDemand.status, 'running');
+    await assert.rejects(service.startCorrection(onDemand.id), error => error.status === 409);
+    await service.waitForIdle();
+    const onDemandDone = await service.get(onDemand.id);
+    assert.equal(onDemandDone.status, 'succeeded');
+    assert.equal(onDemandDone.autoCorrect, false, '保留新建时的选择');
+    assert.equal(onDemandDone.canCorrect, false);
+    assert.match(onDemandDone.message, /转写和校订完成/);
+    assert.equal(onDemandDone.files.rawJson.sha256, onDemandEdited.files.rawJson.sha256);
+    assert.equal(onDemandDone.files.rawSrt.sha256, onDemandEdited.files.rawSrt.sha256);
+    assert.deepEqual(timing(onDemandDone.result.correctedSentences), timing(sentences));
+    assert.deepEqual([asrCalls, downloads], countsBeforeCorrection, '按需校订和重试均不重新 ASR 或下载');
+    await assert.rejects(service.startCorrection(onDemand.id), error => error.code === 'CORRECTION_NOT_AVAILABLE');
 
     failCorrection = true;
     const partial = await create();
@@ -166,6 +202,8 @@ async function run() {
 
     noSpeech = true;
     const silent = await create(false);
+    assert.equal(silent.canCorrect, false, '没有人声不显示校订入口');
+    await assert.rejects(service.startCorrection(silent.id), error => error.code === 'CORRECTION_NOT_AVAILABLE');
     await assert.rejects(service.updateText(silent.id, edit(silent, 'raw', ['不能补造人声'])), error => error.code === 'TEXT_NOT_EDITABLE');
     await service.remove(initial.id);
     await assert.rejects(service.updateText(initial.id, body), error => error.code === 'TASK_NOT_FOUND');

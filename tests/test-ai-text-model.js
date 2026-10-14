@@ -169,6 +169,7 @@ async function run() {
 
   let injectedRequestOptions = null;
   const injected = await aiTextModel.callTextModel({
+    configPath,
     messages: [{ role: 'user', content: 'injected config' }],
     textConfig: {
       enabled: true,
@@ -196,13 +197,14 @@ async function run() {
   assert.strictEqual(injected.text, '{"ok":true}');
   assert.strictEqual(injected.model.protocol, 'anthropic-messages');
   assert.strictEqual(injectedRequestOptions.headers['x-api-key'], 'sk-ant-test');
-  assert.strictEqual(injectedRequestOptions.headers['anthropic-version'], '2023-06-01');
+  assert.strictEqual(injectedRequestOptions.headers['anthropic-version'], '2023-06-06');
   const anthropicBody = JSON.parse(injectedRequestOptions.body);
   assert.strictEqual(anthropicBody.model, 'claude-test');
   assert.strictEqual(anthropicBody.max_tokens, 4096);
   assert.match(anthropicBody.system, /有效 JSON/);
 
   const anthropicImageAndTool = await aiTextModel.callTextModel({
+    configPath,
     messages: [
       {
         role: 'assistant',

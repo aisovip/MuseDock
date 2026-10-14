@@ -5,6 +5,7 @@ const { requestSecrets, redactUrl, redactText, redactValue, redactBody, redactHe
 
 const contextStorage = new AsyncLocalStorage();
 const RECORD_REFS = Symbol('apiCallRecords');
+const STREAM_COMPLETED = Symbol('analysisStreamCompleted');
 const pendingCaptures = new Set();
 const MAX_CAPTURE_BYTES = 64 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -72,10 +73,11 @@ async function captureResponse(response, reference, startedAt, control) {
   let truncated = false;
   let reader;
   let finished = false;
-  control.cancel = () => {
+  control.cancel = reason => {
     if (finished) return Promise.resolve();
-    failure = '调用方已取消响应读取，记录仅保留取消前收到的内容。';
-    return reader?.cancel().catch(() => {});
+    // 模型协议已经正常结束时主动关闭连接，不应误记成传输中断。
+    if (reason !== STREAM_COMPLETED) failure = '调用方已取消响应读取，记录仅保留取消前收到的内容。';
+    return reader?.cancel(reason).catch(() => {});
   };
   const contentType = response.headers?.get?.('content-type') || '';
   try {
@@ -135,7 +137,7 @@ function responseWithCoordinatedCancel(response, control) {
     cancel(reason) {
       finished = true;
       // tee 两侧必须同时取消；只取消业务侧会等待诊断侧 EOF，拖住原本可立即完成的取消。
-      const captureCancellation = control.cancel?.();
+      const captureCancellation = control.cancel?.(reason);
       const businessCancellation = reader.cancel(reason);
       return Promise.all([captureCancellation, businessCancellation]).finally(() => reader.releaseLock());
     },
@@ -241,5 +243,5 @@ async function flushApiCallRecords() {
   await Promise.allSettled([...pendingCaptures]);
 }
 
-module.exports = { recordedFetch, runWithApiCallContext, apiCallContextMiddleware, recordModelCall,
+module.exports = { STREAM_COMPLETED, recordedFetch, runWithApiCallContext, apiCallContextMiddleware, recordModelCall,
   annotateApiCallResult, flushApiCallRecords, getApiCallStorageWarning: () => storageWarning };
